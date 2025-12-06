@@ -9,6 +9,8 @@ from dash import Dash, dcc, html, Input, Output
 import dash_bootstrap_components as dbc
 import geopandas as gpd  # NEW: for reading SHP
 
+
+print("Lade Daten und initialisiere Dashboard...")
 # Use a light Plotly template
 pio.templates.default = "plotly_white"
 
