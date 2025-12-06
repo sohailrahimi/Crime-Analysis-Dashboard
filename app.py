@@ -188,58 +188,24 @@ def fig_trend(d):
     if d.empty:
         return empty_fig()
 
-    # ---- Victims by year ----
-    victims = (
-        d[d["Straftat_kurz"] != "Straftaten insgesamt"]
-        .groupby("Jahr")["Oper insgesamt"]
-        .sum()
-        .reset_index()
-        .rename(columns={"Oper insgesamt": "Opfer"})
-    )
+    # Remove Straftaten insgesamt (we want victims only)
+    d2 = d[d["Straftat_kurz"] != "Straftaten insgesamt"]
 
-    # ---- Crimes by year (Straftaten insgesamt) ----
-    crimes = (
-        d[d["Straftat_kurz"] == "Straftaten insgesamt"]
-        .groupby("Jahr")["Oper insgesamt"]
-        .sum()
-        .reset_index()
-        .rename(columns={"Oper insgesamt": "Straftaten"})
-    )
+    # Group victims by year
+    g = d2.groupby("Jahr")["Oper insgesamt"].sum().reset_index()
 
-    # Merge into one dataframe for combined line chart
-    df_line = victims.merge(crimes, on="Jahr", how="left")
-
-    fig = go.Figure()
-
-    # Victim trend line
-    fig.add_trace(go.Scatter(
-        x=df_line["Jahr"],
-        y=df_line["Opfer"],
-        mode="lines+markers",
-        name="Opfer insgesamt",
-        line=dict(color="#1f77b4", width=3),
-        marker=dict(size=8)
-    ))
-
-    # Crime trend line
-    fig.add_trace(go.Scatter(
-        x=df_line["Jahr"],
-        y=df_line["Straftaten"],
-        mode="lines+markers",
-        name="Straftaten insgesamt",
-        line=dict(color="#d62728", width=3, dash="dash"),
-        marker=dict(size=8)
-    ))
-
-    fig.update_layout(
-        title="Zeitliche Entwicklung: Opfer vs. Straftaten",
-        xaxis_title="Jahr",
-        yaxis_title="Anzahl",
-        legend_title="Kategorie",
-        hovermode="x unified",
+    fig = px.line(
+        g,
+        x="Jahr",
+        y="Oper insgesamt",
+        markers=True,
+        color_discrete_sequence=["#1f77b4"],
+        title="Zeitliche Entwicklung der Opferzahlen",
+        labels={"Oper insgesamt": "Opferzahl"}
     )
 
     return fig
+
 
 
 
