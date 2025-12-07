@@ -89,6 +89,48 @@ AGE_COLS = {
     "Erwachsene 21–<60": "Opfer Erwachsene 21 bis unter 60 Jahre - insgesamt",
     "Senior:innen 60+": "Opfer - Erwachsene 60 Jahre und aelter - insgesamt",
 }
+CRIME_SYNONYMS = {
+
+    # ===== GENERAL =====
+    "Straftaten insgesamt": "Alle Straftaten",
+
+    # ===== HOMICIDE =====
+    "Mord Totschlag und Tötung auf Verlangen": "Mord & Totschlag",
+    "Mord": "Mord",
+    "Totschlag": "Totschlag",
+
+    # ===== SEXUAL CRIME =====
+    "Vergewaltigung sexuelle Nötigung und sexueller Übergriff": "Sexualstraftaten",
+    "Vergewaltigung sexuelle Nötigung und sexueller Übergriff im besonders schweren Fall": "Sexualstraftaten",
+    "Sexueller Missbrauch von Kindern": "Missbrauch Kinder",
+
+    # ===== ROBBERY =====
+    "Raub räuberische Erpressung und räuberischer Angriff auf Kraftfahrer": "Raub & Erpressung",
+    "Raub räuberische Erpressung auf/gegen Geldinstitute": "Raub Banken/Post",
+    "Raub räuberische Erpressung auf/gegen sonstige Kassenräume und Geschäfte": "Raub Geschäfte",
+    "Raub räuberische Erpressung auf/gegen sonstige Zahlstellen und Geschäfte": "Raub Geschäfte",
+    "Handtaschenraub": "Handtaschenraub",
+    "Sonstige Raubüberfälle auf Straßen": "Raub auf Straßen",
+    "Raubüberfälle in Wohnungen": "Raub in Wohnungen",
+
+    # ===== ASSAULT =====
+    "Gefährliche und schwere Körperverletzung": "Schwere KV",
+    "Vorsätzliche einfache Körperverletzung": "Einfache KV",
+
+    # ===== POLICE OFFENCES =====
+    "Widerstand gegen und tätlicher Angriff auf Vollstreckungsbeamte": "Widerstand/Angriff Beamte",
+    "Widerstand gegen Vollstreckungsbeamte": "Widerstand gegen Beamte",
+    "Tätlicher Angriff auf Vollstreckungsbeamte": "Angriff auf Beamte",
+
+    # ===== OTHER =====
+    "Gewaltkriminalität": "Gewaltkriminalität",
+    "Diebstahl insgesamt": "Diebstahl",
+    "Betrug insgesamt": "Betrug",
+    "Computerbetrug": "Cyberbetrug",
+    "Rauschgiftdelikte": "Drogendelikte",
+    "Sachbeschädigung": "Sachbeschädigung",
+}
+
 
 # --------- LOAD DATA ---------
 def load_data():
@@ -113,18 +155,14 @@ def load_data():
     df_insg = df_all[df_all["Fallstatus"] == "insg."].copy()
 
     def short(s: str) -> str:
-        s = s.strip()
-        if "Gefährliche und schwere Körperverletzung" in s:
-            return "Gefährliche/schwere KV"
-        if "Vorsätzliche einfache Körperverletzung" in s:
-            return "Einfache KV"
-        if s.startswith("Mord Totschlag"):
-            return "Mord/Totschlag"
-        if "Vergewaltigung sexuelle Nötigung" in s:
-            return "Sexualdelikte"
-        if s.startswith("Straftaten insgesamt"):
-            return "Straftaten insgesamt"
-        return s[:45] + ("…" if len(s) > 45 else "")
+            s = s.strip()
+
+            for long_name, short_name in CRIME_SYNONYMS.items():
+                if long_name in s:
+                    return short_name
+
+    # fallback: clean & shorten safely if unknown
+            return s.replace("  ", " ").strip()
 
     df_insg["Straftat_kurz"] = df_insg["Straftat"].apply(short)
     return df_insg
@@ -134,6 +172,9 @@ df = load_data()
 YEARS = sorted(df["Jahr"].unique())
 CRIME_SHORT = sorted(df["Straftat_kurz"].unique())
 STATES = sorted(df["Bundesland"].dropna().unique())
+
+
+# Show the longest crime names that are still used
 
 # --------- LOAD GEO DATA ---------
 print("Lade Geodaten...")
