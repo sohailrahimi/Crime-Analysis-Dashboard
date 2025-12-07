@@ -7,10 +7,10 @@ import plotly.graph_objects as go
 import plotly.io as pio
 from dash import Dash, dcc, html, Input, Output
 import dash_bootstrap_components as dbc
-import geopandas as gpd  # NEW: for reading SHP
-
+import geopandas as gpd
 
 print("Lade Daten und initialisiere Dashboard...")
+
 # Use a light Plotly template
 pio.templates.default = "plotly_white"
 
@@ -26,7 +26,7 @@ SIDEBAR_BORDER = "#c7d2fe"
 # --------- LAYOUT STYLES ---------
 SIDEBAR_STYLE = {
     "position": "fixed",
-    "top": "130px",     # moved down so navigation is fully visible
+    "top": "130px",     # below header
     "left": 0,
     "bottom": 0,
     "width": "300px",
@@ -42,14 +42,14 @@ SIDEBAR_STYLE = {
 
 CONTENT_STYLE = {
     "marginLeft": "290px",
-    "marginTop": "130px",   # increased to match new header height
+    "marginTop": "130px",
     "padding": "20px 20px 40px 20px",
     "backgroundColor": "#ffffff",
     "minHeight": "100vh",
 }
 
 CARD_STYLE = {
-    "backgroundColor": "#e8f0fe",  # KPI cards
+    "backgroundColor": "#e8f0fe",
     "borderRadius": "10px",
     "padding": "16px",
     "margin": "6px",
@@ -93,7 +93,7 @@ def load_data():
     dfs = []
     for year in range(2019, 2025):
         df = pd.read_csv(f"{year} Opfer.csv", sep=";", encoding="latin1")
-        df.columns = [c.strip() for c in df.columns]
+        df.columns = [c.strip() for c in df.columns]  # removes trailing spaces
         df["Jahr"] = year
         dfs.append(df)
 
@@ -101,7 +101,6 @@ def load_data():
     df_all["Bundesland_Code"] = (df_all["Gemeindeschluessel"] // 1000).astype(int)
     df_all["Bundesland"] = df_all["Bundesland_Code"].map(STATE_MAP)
 
-    # Only totals
     df_insg = df_all[df_all["Fallstatus"] == "insg."].copy()
 
     def short(s: str) -> str:
@@ -126,15 +125,6 @@ df = load_data()
 YEARS = sorted(df["Jahr"].unique())
 CRIME_SHORT = sorted(df["Straftat_kurz"].unique())
 STATES = sorted(df["Bundesland"].dropna().unique())
-
-# --------- GEOJSON (no longer used for map, but kept if needed elsewhere) ---------
-try:
-    with urlopen(
-        "https://raw.githubusercontent.com/isellsoap/deutschlandGeoJSON/main/2_bundeslaender/4_niedrig.geo.json"
-    ) as response:
-        STATES_GEOJSON = json.load(response)
-except Exception:
-    STATES_GEOJSON = None
 
 # --------- HELPERS ---------
 def filter_data(years, crimes, states):
@@ -172,10 +162,9 @@ def build_kpis(d):
     - männlich vs. weiblich (%)
     - Unter 18 vs. Erwachsene (%)
     - Anzahl Deliktsgruppen
-    - Anzahl betroffene Gemeinden
     """
     if d.empty:
-        return ("0", "0", "0 % / 0 %", "0 % / 0 %", "0", "0")
+        return ("0", "0", "0 % / 0 %", "0 % / 0 %", "0")
 
     # 1) Gesamtzahl der Opfer
     total_victims = d["Oper insgesamt"].sum()
@@ -184,7 +173,7 @@ def build_kpis(d):
     n_years = d["Jahr"].nunique()
     victims_per_year = int(round(total_victims / n_years)) if n_years > 0 else 0
 
-    # 3) männlich vs weiblich (%)
+    # 3) männlich vs. weiblich (%)
     male = d["Opfer maennlich"].sum() if "Opfer maennlich" in d.columns else 0
     female = d["Opfer weiblich"].sum() if "Opfer weiblich" in d.columns else 0
     sex_total = male + female
@@ -217,23 +206,22 @@ def build_kpis(d):
         )
     else:
         crime_types = 0
+
     return (
         format_int(total_victims),
         format_int(victims_per_year),
         male_female_str,
         under18_adults_str,
-        str(crime_types)
+        str(crime_types),
     )
+
 
 # --------- OVERVIEW FIGURES ---------
 def fig_trend(d):
     if d.empty:
         return empty_fig()
 
-    # Remove Straftaten insgesamt (we want victims only)
     d2 = d[d["Straftat_kurz"] != "Straftaten insgesamt"]
-
-    # Group victims by year
     g = d2.groupby("Jahr")["Oper insgesamt"].sum().reset_index()
 
     fig = px.line(
@@ -243,12 +231,9 @@ def fig_trend(d):
         markers=True,
         color_discrete_sequence=["#1f77b4"],
         title="Zeitliche Entwicklung der Opferzahlen",
-        labels={"Oper insgesamt": "Opferzahl"}
+        labels={"Oper insgesamt": "Opferzahl"},
     )
-
     return fig
-
-
 
 
 def fig_top5(d):
@@ -294,34 +279,33 @@ def fig_donut(d):
 
 
 # --------- GEOGRAPHIC FIGURES ---------
-# NEW: SHP-based Bundesländer map (no Mapbox)
+# Modern interactive SHP-based Mapbox-style map
 def fig_geo_map(d):
     if d.empty:
         return empty_fig()
 
     try:
-        # Cache loaded shapefile
         if not hasattr(fig_geo_map, "gdf"):
+            print("Lade SHP für Bundesländer ...")
+            # Adjust path if needed
             gdf = gpd.read_file("data/gadm41_DEU_1.shp")
+
+            # Handle multi-polygons
+            gdf = gdf.explode(index_parts=True).reset_index(drop=True)
+
+            # Reproject to WGS84
             gdf = gdf.to_crs("EPSG:4326")
-            gdf["Bundesland"] = gdf["NAME_1"]   # Bundesland names
+
+            # Bundesland name in this SHP:
+            gdf["Bundesland"] = gdf["NAME_1"]
+
             fig_geo_map.gdf = gdf
         else:
             gdf = fig_geo_map.gdf
-
     except Exception as e:
         return empty_fig(f"Shapefile konnte nicht geladen werden: {e}")
 
-    # ---- CRIME TOTALS ----
-    crimes_df = d[d["Straftat_kurz"] == "Straftaten insgesamt"]
-    crimes = (
-        crimes_df.groupby("Bundesland")["Oper insgesamt"]
-        .sum()
-        .reset_index()
-        .rename(columns={"Oper insgesamt": "Straftaten_insgesamt"})
-    )
-
-    # ---- VICTIM TOTALS ----
+    # Only victims (exclude Straftaten insgesamt)
     victims_df = d[d["Straftat_kurz"] != "Straftaten insgesamt"]
     victims = (
         victims_df.groupby("Bundesland")["Oper insgesamt"]
@@ -330,46 +314,31 @@ def fig_geo_map(d):
         .rename(columns={"Oper insgesamt": "Opfer_insgesamt"})
     )
 
-    # Merge crime + victim stats
-    stats = crimes.merge(victims, on="Bundesland", how="outer")
+    gdf_merged = gdf.merge(victims, on="Bundesland", how="left")
+    gdf_merged = gdf_merged.dropna(subset=["Opfer_insgesamt"])
 
-    # Merge stats with shapes
-    merged = gdf.merge(stats, on="Bundesland", how="left")
-
-    # Convert shape to geojson
-    geojson_data = json.loads(merged.to_json())
+    geojson_data = json.loads(gdf_merged.to_json())
 
     fig = px.choropleth_mapbox(
-        merged,
+        gdf_merged,
         geojson=geojson_data,
-        locations=merged.index,
-        color="Straftaten_insgesamt",
+        locations=gdf_merged.index,
+        color="Opfer_insgesamt",
         hover_name="Bundesland",
-        hover_data={
-            "Straftaten_insgesamt": True,
-            "Opfer_insgesamt": True,
-        },
+        hover_data={"Opfer_insgesamt": True},
         opacity=0.55,
-        mapbox_style="open-street-map",   # MODERN MAP, NO TOKEN REQUIRED
+        mapbox_style="open-street-map",  # no token required
         color_continuous_scale="Reds",
-        labels={
-            "Straftaten_insgesamt": "Straftaten gesamt",
-            "Opfer_insgesamt": "Opfer gesamt",
-        },
         zoom=4.5,
-        center={"lat": 51.0, "lon": 10.2},  # Germany center
-        title="Straftaten & Opfer nach Bundesland (Moderne Interaktive Karte)",
+        center={"lat": 51.0, "lon": 10.2},
+        title="Opfer nach Bundesland (Interaktive SHP-basierte Karte)",
     )
 
     fig.update_layout(
         margin={"r": 0, "t": 50, "l": 0, "b": 0},
-        coloraxis_colorbar_title="Straftaten insgesamt",
+        coloraxis_colorbar_title="Opfer gesamt",
     )
-
     return fig
-
-
-
 
 
 def fig_geo_state_bar(d):
@@ -618,46 +587,49 @@ def layout_overview():
                 className="text-muted",
             ),
             html.Div(
-    style={"display": "flex", "flexWrap": "wrap"},
-    children=[
-        html.Div(
-            style=CARD_STYLE,
-            children=[
-                html.Div("Gesamtzahl der Opfer", style=KPI_LABEL_STYLE),
-                html.Div(id="kpi-total-victims", style=KPI_VALUE_STYLE),
-            ],
-        ),
-        html.Div(
-            style=CARD_STYLE,
-            children=[
-                html.Div("Opfer pro Jahr (Ø)", style=KPI_LABEL_STYLE),
-                html.Div(id="kpi-victims-per-year", style=KPI_VALUE_STYLE),
-            ],
-        ),
-        html.Div(
-            style=CARD_STYLE,
-            children=[
-                html.Div("Verhältnis männlich / weiblich", style=KPI_LABEL_STYLE),
-                html.Div(id="kpi-male-female", style=KPI_VALUE_STYLE),
-            ],
-        ),
-        html.Div(
-            style=CARD_STYLE,
-            children=[
-                html.Div("Unter 18 / Erwachsene", style=KPI_LABEL_STYLE),
-                html.Div(id="kpi-under18-adults", style=KPI_VALUE_STYLE),
-            ],
-        ),
-        html.Div(
-            style=CARD_STYLE,
-            children=[
-                html.Div("Anzahl Deliktsgruppen", style=KPI_LABEL_STYLE),
-                html.Div(id="kpi-crime-types", style=KPI_VALUE_STYLE),
-            ],
-        ),
-        
-    ],
-),
+                style={"display": "flex", "flexWrap": "wrap"},
+                children=[
+                    html.Div(
+                        style=CARD_STYLE,
+                        children=[
+                            html.Div("Gesamtzahl der Opfer", style=KPI_LABEL_STYLE),
+                            html.Div(id="kpi-total-victims", style=KPI_VALUE_STYLE),
+                        ],
+                    ),
+                    html.Div(
+                        style=CARD_STYLE,
+                        children=[
+                            html.Div("Opfer pro Jahr (Ø)", style=KPI_LABEL_STYLE),
+                            html.Div(
+                                id="kpi-victims-per-year", style=KPI_VALUE_STYLE
+                            ),
+                        ],
+                    ),
+                    html.Div(
+                        style=CARD_STYLE,
+                        children=[
+                            html.Div(
+                                "Verhältnis männlich / weiblich", style=KPI_LABEL_STYLE
+                            ),
+                            html.Div(id="kpi-male-female", style=KPI_VALUE_STYLE),
+                        ],
+                    ),
+                    html.Div(
+                        style=CARD_STYLE,
+                        children=[
+                            html.Div("Unter 18 / Erwachsene", style=KPI_LABEL_STYLE),
+                            html.Div(id="kpi-under18-adults", style=KPI_VALUE_STYLE),
+                        ],
+                    ),
+                    html.Div(
+                        style=CARD_STYLE,
+                        children=[
+                            html.Div("Anzahl Deliktsgruppen", style=KPI_LABEL_STYLE),
+                            html.Div(id="kpi-crime-types", style=KPI_VALUE_STYLE),
+                        ],
+                    ),
+                ],
+            ),
             html.Br(),
             dcc.Graph(id="trend"),
             html.Br(),
@@ -735,7 +707,6 @@ def layout_temporal():
 # --------- ROOT LAYOUT (HEADER + SIDEBAR + CONTENT) ---------
 app.layout = html.Div(
     children=[
-        # Fixed top header
         html.Div(
             style={
                 "backgroundColor": HEADER_BG,
@@ -814,22 +785,24 @@ def render_page(path):
 def update_overview(years, states):
     d = filter_data(years or YEARS, [], states or [])
     (
-    total_victims,
-    victims_per_year,
-    male_female,
-    under18_adults,
-    crime_types,
-) = build_kpis(d)
+        total_victims,
+        victims_per_year,
+        male_female,
+        under18_adults,
+        crime_types,
+    ) = build_kpis(d)
     return (
-    total_victims,
-    victims_per_year,
-    male_female,
-    under18_adults,
-    crime_types,
-    fig_trend(d),
-    fig_top5(d),
-    fig_donut(d),
-)
+        total_victims,
+        victims_per_year,
+        male_female,
+        under18_adults,
+        crime_types,
+        fig_trend(d),
+        fig_top5(d),
+        fig_donut(d),
+    )
+
+
 # --------- GEOGRAPHIC CALLBACK ---------
 @app.callback(
     Output("map", "figure"),
@@ -871,7 +844,6 @@ def update_crime(years, crimes, states, age_crime_sel):
 def update_temporal(years, crimes, states):
     d = filter_data(years or YEARS, crimes or [], states or [])
     return fig_state_trend(d), fig_diverg(d), fig_gender(d)
-
 
 
 if __name__ == "__main__":
