@@ -90,10 +90,6 @@ AGE_COLS = {
     "Senior:innen 60+": "Opfer - Erwachsene 60 Jahre und aelter - insgesamt",
 }
 CRIME_SYNONYMS = {
-
-    # ===== GENERAL =====
-    "Straftaten insgesamt": "Alle Straftaten",
-
     # ===== HOMICIDE =====
     "Mord Totschlag und Tötung auf Verlangen": "Mord & Totschlag",
     "Mord": "Mord",
