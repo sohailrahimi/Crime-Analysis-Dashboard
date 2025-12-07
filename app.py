@@ -5,9 +5,10 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import plotly.io as pio
-from dash import Dash, dcc, html, Input, Output
+from dash import Dash, dcc, html, Input, Output, State, callback_context
 import dash_bootstrap_components as dbc
 import geopandas as gpd
+import numpy as np
 
 print("Lade Daten und initialisiere Dashboard...")
 
@@ -60,6 +61,7 @@ CARD_STYLE = {
 KPI_VALUE_STYLE = {"fontSize": "26px", "fontWeight": "bold"}
 KPI_LABEL_STYLE = {"fontSize": "13px", "opacity": 0.8}
 STANDARD_HEIGHT = 500
+
 # --------- DATA META ---------
 STATE_MAP = {
     1: "Schleswig-Holstein",
@@ -100,6 +102,13 @@ def load_data():
     df_all = pd.concat(dfs, ignore_index=True)
     df_all["Bundesland_Code"] = (df_all["Gemeindeschluessel"] // 1000).astype(int)
     df_all["Bundesland"] = df_all["Bundesland_Code"].map(STATE_MAP)
+    
+    # Create a proper Region column (Stadt/Landkreis)
+    if "Stadt/Landkreis" in df_all.columns:
+        df_all["Region"] = df_all["Stadt/Landkreis"]
+    else:
+        # Fallback if column name is different
+        df_all["Region"] = "Unbekannt"
 
     df_insg = df_all[df_all["Fallstatus"] == "insg."].copy()
 
@@ -125,6 +134,28 @@ df = load_data()
 YEARS = sorted(df["Jahr"].unique())
 CRIME_SHORT = sorted(df["Straftat_kurz"].unique())
 STATES = sorted(df["Bundesland"].dropna().unique())
+
+# --------- LOAD GEO DATA ---------
+print("Lade Geodaten...")
+try:
+    # Load state boundaries
+    gdf_states = gpd.read_file("data/gadm41_DEU_1.shp")
+    gdf_states = gdf_states.explode(index_parts=True).reset_index(drop=True)
+    gdf_states = gdf_states.to_crs("EPSG:4326")
+    gdf_states["Bundesland"] = gdf_states["NAME_1"]
+    
+    # Load city boundaries (level 2) - still needed for city view
+    gdf_cities = gpd.read_file("data/gadm41_DEU_2.shp")
+    gdf_cities = gdf_cities.explode(index_parts=True).reset_index(drop=True)
+    gdf_cities = gdf_cities.to_crs("EPSG:4326")
+    gdf_cities["Bundesland"] = gdf_cities["NAME_1"]
+    gdf_cities["City"] = gdf_cities["NAME_2"]
+    
+    print(f"Geladen: {len(gdf_states)} Bundesländer, {len(gdf_cities)} Städte/Landkreise")
+except Exception as e:
+    print(f"Fehler beim Laden der Geodaten: {e}")
+    gdf_states = None
+    gdf_cities = None
 
 # --------- HELPERS ---------
 def filter_data(years, crimes, states):
@@ -277,7 +308,7 @@ def fig_donut(d):
         path=["Straftat_kurz"],
         values="Oper insgesamt",
         color="Oper insgesamt",
-        color_continuous_scale="Turbo",  # oder 'Viridis' für neutraler Look
+        color_continuous_scale="Turbo",
         title="Struktur der Deliktsgruppen (Treemap)",
     )
 
@@ -286,65 +317,173 @@ def fig_donut(d):
 
 
 # --------- GEOGRAPHIC FIGURES ---------
-# Modern interactive SHP-based Mapbox-style map
-def fig_geo_map(d):
-    if d.empty:
-        return empty_fig()
-
-    try:
-        if not hasattr(fig_geo_map, "gdf"):
-            print("Lade SHP für Bundesländer ...")
-            # Adjust path if needed
-            gdf = gpd.read_file("data/gadm41_DEU_1.shp")
-
-            # Handle multi-polygons
-            gdf = gdf.explode(index_parts=True).reset_index(drop=True)
-
-            # Reproject to WGS84
-            gdf = gdf.to_crs("EPSG:4326")
-
-            # Bundesland name in this SHP:
-            gdf["Bundesland"] = gdf["NAME_1"]
-
-            fig_geo_map.gdf = gdf
-        else:
-            gdf = fig_geo_map.gdf
-    except Exception as e:
-        return empty_fig(f"Shapefile konnte nicht geladen werden: {e}")
-
-    # Only victims (exclude Straftaten insgesamt)
+def prepare_state_geo_data(d):
+    """Prepare state-level geographic data"""
+    if d.empty or gdf_states is None:
+        return None, None
+    
+    # Filter data
     victims_df = d[d["Straftat_kurz"] != "Straftaten insgesamt"]
+    
+    # Aggregate by state
     victims = (
         victims_df.groupby("Bundesland")["Oper insgesamt"]
         .sum()
         .reset_index()
         .rename(columns={"Oper insgesamt": "Opfer_insgesamt"})
     )
-
-    gdf_merged = gdf.merge(victims, on="Bundesland", how="left")
-    gdf_merged = gdf_merged.dropna(subset=["Opfer_insgesamt"])
-
+    
+    # Merge with geographic data
+    gdf_merged = gdf_states.merge(victims, on="Bundesland", how="left")
+    gdf_merged["Opfer_insgesamt"] = gdf_merged["Opfer_insgesamt"].fillna(0)
+    
+    # Create GeoJSON
     geojson_data = json.loads(gdf_merged.to_json())
+    
+    return gdf_merged, geojson_data
 
-    fig = px.choropleth_mapbox(
-        gdf_merged,
-        geojson=geojson_data,
-        locations=gdf_merged.index,
-        color="Opfer_insgesamt",
-        hover_name="Bundesland",
-        hover_data={"Opfer_insgesamt": True},
-        opacity=0.55,
-        mapbox_style="open-street-map",  # no token required
-        color_continuous_scale="Reds",
-        zoom=4.5,
-        center={"lat": 51.0, "lon": 10.2},
-        title="Opfer nach Bundesland (Interaktive SHP-basierte Karte)",
+
+def prepare_city_geo_data(d, selected_state):
+    """Prepare city-level geographic data for selected state"""
+    if d.empty or gdf_cities is None or not selected_state:
+        return None, None, None
+    
+    # Filter data for selected state
+    state_data = d[d["Bundesland"] == selected_state]
+    if state_data.empty:
+        return None, None, None
+    
+    # Filter geographic data for selected state
+    gdf_state_cities = gdf_cities[gdf_cities["Bundesland"] == selected_state]
+    
+    if gdf_state_cities.empty:
+        return None, None, None
+    
+    # Aggregate victim data by region
+    city_victims = (
+        state_data.groupby("Region")["Oper insgesamt"]
+        .sum()
+        .reset_index()
+        .rename(columns={"Oper insgesamt": "Opfer_insgesamt"})
     )
+    
+    # Try to match city names
+    gdf_merged = gdf_state_cities.copy()
+    
+    # Simple matching: check if any part of the city name matches
+    def find_matching_city(region_name):
+        region_lower = str(region_name).lower()
+        for city in gdf_state_cities["City"].unique():
+            city_lower = str(city).lower()
+            if region_lower in city_lower or city_lower in region_lower:
+                return city
+        return None
+    
+    # Create mapping
+    city_mapping = {}
+    for _, row in city_victims.iterrows():
+        region = row["Region"]
+        matching_city = find_matching_city(region)
+        if matching_city:
+            city_mapping[matching_city] = row["Opfer_insgesamt"]
+        else:
+            # Store with original region name
+            city_mapping[region] = row["Opfer_insgesamt"]
+    
+    # Map values to GeoDataFrame
+    gdf_merged["Opfer_insgesamt"] = gdf_merged["City"].map(city_mapping).fillna(0)
+    
+    # Create GeoJSON
+    geojson_data = json.loads(gdf_merged.to_json())
+    
+    # Calculate center - FIXED: Use proper projection for centroid calculation
+    # First project to a meter-based CRS (UTM zone 32N for Germany)
+    try:
+        gdf_projected = gdf_merged.to_crs("EPSG:32632")  # UTM zone 32N
+        centroid = gdf_projected.geometry.centroid
+        # Convert back to WGS84 (lat/lon)
+        centroid_wgs84 = centroid.to_crs("EPSG:4326")
+        center_lat = centroid_wgs84.y.mean()
+        center_lon = centroid_wgs84.x.mean()
+    except Exception as e:
+        print(f"Warning: Could not calculate proper centroid for {selected_state}, using simple mean: {e}")
+        # Fallback: use simple mean of coordinates
+        center_lat = gdf_merged.geometry.centroid.y.mean()
+        center_lon = gdf_merged.geometry.centroid.x.mean()
+    
+    return gdf_merged, geojson_data, (center_lat, center_lon)
 
+
+def fig_geo_map(d, selected_state=None):
+    """Create interactive map using the new choropleth_map function"""
+    if d.empty or gdf_states is None:
+        return empty_fig("Keine Geodaten verfügbar")
+    
+    if selected_state:
+        # City-level view for selected state
+        gdf_data, geojson_data, center_coords = prepare_city_geo_data(d, selected_state)
+        
+        if gdf_data is None or geojson_data is None:
+            return empty_fig(f"Keine Geodaten für {selected_state}")
+        
+        center_lat, center_lon = center_coords
+        
+        # Determine zoom level based on state size
+        zoom_levels = {
+            "Berlin": 10, "Bremen": 10, "Hamburg": 10, "Saarland": 9,
+        }
+        zoom = zoom_levels.get(selected_state, 7)
+        
+        # Use the new choropleth_map function
+        fig = px.choropleth_map(
+            gdf_data,
+            geojson=geojson_data,
+            locations=gdf_data.index,
+            color="Opfer_insgesamt",
+            hover_name="City",
+            hover_data={"Opfer_insgesamt": True, "Bundesland": False},
+            opacity=0.7,
+            map_style="open-street-map",
+            color_continuous_scale="Reds",
+            zoom=zoom,
+            center={"lat": center_lat, "lon": center_lon},
+            title=f"Opfer in {selected_state} - Städte/Landkreise"
+        )
+        
+        # Disable click events on cities - only Bundesland clicks are allowed
+        fig.update_layout(clickmode='none')  # Disable all click interactions
+        
+    else:
+        # State-level view for all Germany
+        gdf_data, geojson_data = prepare_state_geo_data(d)
+        
+        if gdf_data is None or geojson_data is None:
+            return empty_fig()
+        
+        # Use the new choropleth_map function
+        fig = px.choropleth_map(
+            gdf_data,
+            geojson=geojson_data,
+            locations=gdf_data.index,
+            color="Opfer_insgesamt",
+            hover_name="Bundesland",
+            hover_data={"Opfer_insgesamt": True},
+            opacity=0.7,
+            map_style="open-street-map",
+            color_continuous_scale="Reds",
+            zoom=4.5,
+            center={"lat": 51.0, "lon": 10.2},
+            title="Opfer nach Bundesland ",
+        )
+        
+        # Enable click events only at state level
+        fig.update_layout(clickmode='event+select')
+    
     fig.update_layout(
         margin={"r": 0, "t": 50, "l": 0, "b": 0},
         coloraxis_colorbar_title="Opfer gesamt",
     )
+    
     return fig
 
 
@@ -370,13 +509,13 @@ def fig_geo_top(d):
     if d.empty:
         return empty_fig()
     g = (
-        d.groupby(["Stadt/Landkreis", "Bundesland"])["Oper insgesamt"]
+        d.groupby(["Region", "Bundesland"])["Oper insgesamt"]
         .sum()
         .reset_index()
         .nlargest(10, "Oper insgesamt")
         .sort_values("Oper insgesamt")
     )
-    g["Label"] = g["Stadt/Landkreis"] + " (" + g["Bundesland"] + ")"
+    g["Label"] = g["Region"] + " (" + g["Bundesland"] + ")"
     fig = px.bar(
         g,
         x="Oper insgesamt",
@@ -508,7 +647,7 @@ def fig_diverg(d):
 def fig_gender(d):
     if d.empty:
         return empty_fig()
-    g = d.groupby(["Stadt/Landkreis", "Bundesland"])[
+    g = d.groupby(["Region", "Bundesland"])[
         ["Opfer maennlich", "Opfer weiblich"]
     ].sum().reset_index()
     fig = px.scatter(
@@ -517,7 +656,7 @@ def fig_gender(d):
         y="Opfer weiblich",
         color="Bundesland",
         color_discrete_sequence=px.colors.qualitative.Set3,
-        hover_name="Stadt/Landkreis",
+        hover_name="Region",
         title="Geschlechtervergleich (m/w)",
     )
     return fig
@@ -530,7 +669,6 @@ app = Dash(
     suppress_callback_exceptions=True,
 )
 app.title = "Crime Analysis Dashboard"
-
 
 # --------- SIDEBAR ---------
 def sidebar_layout(path):
@@ -661,9 +799,39 @@ def layout_geo():
         children=[
             html.H2("Geografische Analyse", className="mb-3"),
             html.P(
-                "Vergleich der Opferzahlen nach Bundesland und Region.",
+                "Vergleich der Opferzahlen nach Bundesland und Region. Klicken Sie auf ein Bundesland, um die Städte/Landkreise anzuzeigen.",
                 className="text-muted",
             ),
+            html.Div(
+                id="state-info",
+                style={
+                    "backgroundColor": "#f0f9ff",
+                    "padding": "10px",
+                    "borderRadius": "5px",
+                    "marginBottom": "20px",
+                    "borderLeft": "4px solid #3b82f6"
+                },
+                children=[
+                    html.Div(id="current-state-display", children="Aktuelle Ansicht: Deutschland"),
+                    html.Div(id="state-back-button", style={"display": "none"}, children=[
+                        html.Button(
+                            "← Zurück zur Deutschland-Ansicht",
+                            id="back-to-germany",
+                            n_clicks=0,
+                            style={
+                                "backgroundColor": "#3b82f6",
+                                "color": "white",
+                                "border": "none",
+                                "padding": "5px 10px",
+                                "borderRadius": "3px",
+                                "cursor": "pointer",
+                                "marginTop": "10px"
+                            }
+                        )
+                    ])
+                ]
+            ),
+            dcc.Store(id="selected-state-store", data=None),
             dcc.Graph(id="map"),
             html.Br(),
             dcc.Graph(id="statebar"),
@@ -829,18 +997,77 @@ def update_overview(years, states):
     )
 
 
-# --------- GEOGRAPHIC CALLBACK ---------
+# --------- GEOGRAPHIC CALLBACKS ---------
+@app.callback(
+    Output("selected-state-store", "data"),
+    Input("map", "clickData"),
+    Input("back-to-germany", "n_clicks"),
+    Input("filter-state", "value"),
+    State("selected-state-store", "data"),
+)
+def update_selected_state(click_data, back_clicks, filter_states, current_state):
+    """Handle state selection logic"""
+    ctx = callback_context
+    
+    if not ctx.triggered:
+        return current_state
+    
+    trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
+    
+    # Reset if back button clicked or filter changed
+    if trigger_id == 'back-to-germany' or trigger_id == 'filter-state':
+        return None
+    
+    # Only process map clicks if we're at state level (not city level)
+    if trigger_id == 'map' and click_data and current_state is None:
+        # We're at state level, so process the click
+        try:
+            if click_data and 'points' in click_data and click_data['points']:
+                point = click_data['points'][0]
+                # Try to get state name from different possible locations
+                if 'hovertext' in point:
+                    return point['hovertext']
+                elif 'location' in point:
+                    return point['location']
+                elif 'customdata' in point and point['customdata']:
+                    return point['customdata'][0]
+        except Exception as e:
+            print(f"Error processing click: {e}")
+    
+    # If we're already in a state view (current_state is not None), 
+    # clicking on the map should do nothing
+    return current_state
+
+
 @app.callback(
     Output("map", "figure"),
     Output("statebar", "figure"),
     Output("topregions", "figure"),
+    Output("current-state-display", "children"),
+    Output("state-back-button", "style"),
     Input("filter-year", "value"),
     Input("filter-crime", "value"),
     Input("filter-state", "value"),
+    Input("selected-state-store", "data"),
 )
-def update_geo(years, crimes, states):
+def update_geo_components(years, crimes, states, selected_state):
+    """Update all geographic components"""
     d = filter_data(years or YEARS, crimes or [], states or [])
-    return fig_geo_map(d), fig_geo_state_bar(d), fig_geo_top(d)
+    
+    # Create figures - only 3 charts now
+    map_fig = fig_geo_map(d, selected_state)
+    state_bar_fig = fig_geo_state_bar(d)
+    top_regions_fig = fig_geo_top(d)
+    
+    # Update display text and back button visibility
+    if selected_state:
+        display_text = f"Aktuelle Ansicht: {selected_state} (Städte/Landkreise) - Kein weiterer Klick möglich"
+        back_button_style = {"display": "block"}
+    else:
+        display_text = "Aktuelle Ansicht: Deutschland (übersicht) - Klicken Sie auf ein Bundesland"
+        back_button_style = {"display": "none"}
+    
+    return map_fig, state_bar_fig, top_regions_fig, display_text, back_button_style
 
 
 # --------- CRIME TYPES CALLBACK ---------
@@ -848,8 +1075,8 @@ def update_geo(years, crimes, states):
     Output("heat", "figure"),
     Output("stacked", "figure"),
     Output("agechart", "figure"),
-    Output("top5-crime", "figure"),   # NEW
-    Output("donut-crime", "figure"),  # NEW
+    Output("top5-crime", "figure"),
+    Output("donut-crime", "figure"),
     Input("filter-year", "value"),
     Input("filter-crime", "value"),
     Input("filter-state", "value"),
@@ -861,9 +1088,8 @@ def update_crime(years, crimes, states, age_crime_sel):
     heat_fig = fig_heatmap(d)
     stacked_fig = fig_stacked(d)
     age_fig = fig_age(d, age_crime_sel)
-
-    top5_fig = fig_top5(d)      # reuse overview logic
-    donut_fig = fig_donut(d)    # reuse overview logic
+    top5_fig = fig_top5(d)
+    donut_fig = fig_donut(d)
 
     return heat_fig, stacked_fig, age_fig, top5_fig, donut_fig
 
