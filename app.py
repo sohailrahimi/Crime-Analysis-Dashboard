@@ -217,17 +217,12 @@ def build_kpis(d):
         )
     else:
         crime_types = 0
-
-    # 6) Anzahl betroffene Gemeinden
-    municipalities = d["Gemeindeschluessel"].nunique() if "Gemeindeschluessel" in d.columns else 0
-
     return (
         format_int(total_victims),
         format_int(victims_per_year),
         male_female_str,
         under18_adults_str,
-        str(crime_types),
-        str(municipalities),
+        str(crime_types)
     )
 
 # --------- OVERVIEW FIGURES ---------
@@ -660,13 +655,7 @@ def layout_overview():
                 html.Div(id="kpi-crime-types", style=KPI_VALUE_STYLE),
             ],
         ),
-        html.Div(
-            style=CARD_STYLE,
-            children=[
-                html.Div("Anzahl betroffene Gemeinden", style=KPI_LABEL_STYLE),
-                html.Div(id="kpi-municipalities", style=KPI_VALUE_STYLE),
-            ],
-        ),
+        
     ],
 ),
             html.Br(),
@@ -816,7 +805,6 @@ def render_page(path):
     Output("kpi-male-female", "children"),
     Output("kpi-under18-adults", "children"),
     Output("kpi-crime-types", "children"),
-    Output("kpi-municipalities", "children"),
     Output("trend", "figure"),
     Output("top5", "figure"),
     Output("donut", "figure"),
@@ -826,25 +814,22 @@ def render_page(path):
 def update_overview(years, states):
     d = filter_data(years or YEARS, [], states or [])
     (
-        total_victims,
-        victims_per_year,
-        male_female,
-        under18_adults,
-        crime_types,
-        municipalities,
-    ) = build_kpis(d)
-
+    total_victims,
+    victims_per_year,
+    male_female,
+    under18_adults,
+    crime_types,
+) = build_kpis(d)
     return (
-        total_victims,
-        victims_per_year,
-        male_female,
-        under18_adults,
-        crime_types,
-        municipalities,
-        fig_trend(d),
-        fig_top5(d),
-        fig_donut(d),
-    )
+    total_victims,
+    victims_per_year,
+    male_female,
+    under18_adults,
+    crime_types,
+    fig_trend(d),
+    fig_top5(d),
+    fig_donut(d),
+)
 # --------- GEOGRAPHIC CALLBACK ---------
 @app.callback(
     Output("map", "figure"),
