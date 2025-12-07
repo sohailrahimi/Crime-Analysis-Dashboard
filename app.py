@@ -59,7 +59,7 @@ CARD_STYLE = {
 
 KPI_VALUE_STYLE = {"fontSize": "26px", "fontWeight": "bold"}
 KPI_LABEL_STYLE = {"fontSize": "13px", "opacity": 0.8}
-STANDARD_HEIGHT = 700
+STANDARD_HEIGHT = 500
 # --------- DATA META ---------
 STATE_MAP = {
     1: "Schleswig-Holstein",
