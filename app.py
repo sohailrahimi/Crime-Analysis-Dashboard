@@ -165,23 +165,70 @@ def format_int(x):
 
 # --------- KPI CALC ---------
 def build_kpis(d):
+    """
+    KPIs:
+    - Gesamtzahl der Opfer
+    - Opfer pro Jahr (Ø)
+    - männlich vs. weiblich (%)
+    - Unter 18 vs. Erwachsene (%)
+    - Anzahl Deliktsgruppen
+    - Anzahl betroffene Gemeinden
+    """
     if d.empty:
-        return "0", "0", "-", "0"
+        return ("0", "0", "0 % / 0 %", "0 % / 0 %", "0", "0")
 
-    total = d["Oper insgesamt"].sum()
-    avg = total / d["Jahr"].nunique()
+    # 1) Gesamtzahl der Opfer
+    total_victims = d["Oper insgesamt"].sum()
 
-    d_no_total = d[d["Straftat_kurz"] != "Straftaten insgesamt"]
-    top = (
-        d_no_total.groupby("Straftat_kurz")["Oper insgesamt"].sum().idxmax()
-        if not d_no_total.empty
-        else "-"
+    # 2) Ø Opfer pro Jahr
+    n_years = d["Jahr"].nunique()
+    victims_per_year = int(round(total_victims / n_years)) if n_years > 0 else 0
+
+    # 3) männlich vs weiblich (%)
+    male = d["Opfer maennlich"].sum() if "Opfer maennlich" in d.columns else 0
+    female = d["Opfer weiblich"].sum() if "Opfer weiblich" in d.columns else 0
+    sex_total = male + female
+
+    def pct(part, whole):
+        if whole <= 0:
+            return "0,0 %"
+        return f"{100 * part / whole:.1f} %".replace(".", ",")
+
+    male_female_str = f"{pct(male, sex_total)} / {pct(female, sex_total)}"
+
+    # 4) Unter 18 vs Erwachsene (%)
+    col_children = "Opfer Kinder bis 14 Jahre- insgesamt"
+    col_youth_14_18 = "Opfer Jugendliche 14 bis unter 18 Jahre - insgesamt"
+
+    under18 = 0
+    if col_children in d.columns:
+        under18 += d[col_children].sum()
+    if col_youth_14_18 in d.columns:
+        under18 += d[col_youth_14_18].sum()
+
+    adults = max(total_victims - under18, 0)
+    under18_adults_str = f"{pct(under18, total_victims)} / {pct(adults, total_victims)}"
+
+    # 5) Anzahl Deliktsgruppen (ohne 'Straftaten insgesamt')
+    if "Straftat_kurz" in d.columns:
+        crime_types = (
+            d.loc[d["Straftat_kurz"] != "Straftaten insgesamt", "Straftat_kurz"]
+            .nunique()
+        )
+    else:
+        crime_types = 0
+
+    # 6) Anzahl betroffene Gemeinden
+    municipalities = d["Gemeindeschluessel"].nunique() if "Gemeindeschluessel" in d.columns else 0
+
+    return (
+        format_int(total_victims),
+        format_int(victims_per_year),
+        male_female_str,
+        under18_adults_str,
+        str(crime_types),
+        str(municipalities),
     )
-
-    total_crime = d[d["Straftat_kurz"] == "Straftaten insgesamt"]["Oper insgesamt"].sum()
-
-    return format_int(total), format_int(avg), top, format_int(total_crime)
-
 
 # --------- OVERVIEW FIGURES ---------
 def fig_trend(d):
@@ -576,38 +623,52 @@ def layout_overview():
                 className="text-muted",
             ),
             html.Div(
-                style={"display": "flex", "flexWrap": "wrap"},
-                children=[
-                    html.Div(
-                        style=CARD_STYLE,
-                        children=[
-                            html.Div("Gesamtzahl der Opfer", style=KPI_LABEL_STYLE),
-                            html.Div(id="kpi-total", style=KPI_VALUE_STYLE),
-                        ],
-                    ),
-                    html.Div(
-                        style=CARD_STYLE,
-                        children=[
-                            html.Div("Ø Opfer pro Jahr", style=KPI_LABEL_STYLE),
-                            html.Div(id="kpi-avg", style=KPI_VALUE_STYLE),
-                        ],
-                    ),
-                    html.Div(
-                        style=CARD_STYLE,
-                        children=[
-                            html.Div("Häufigste Deliktsgruppe", style=KPI_LABEL_STYLE),
-                            html.Div(id="kpi-top", style=KPI_VALUE_STYLE),
-                        ],
-                    ),
-                    html.Div(
-                        style=CARD_STYLE,
-                        children=[
-                            html.Div("Straftaten insgesamt (Fälle)", style=KPI_LABEL_STYLE),
-                            html.Div(id="kpi-total-crime", style=KPI_VALUE_STYLE),
-                        ],
-                    ),
-                ],
-            ),
+    style={"display": "flex", "flexWrap": "wrap"},
+    children=[
+        html.Div(
+            style=CARD_STYLE,
+            children=[
+                html.Div("Gesamtzahl der Opfer", style=KPI_LABEL_STYLE),
+                html.Div(id="kpi-total-victims", style=KPI_VALUE_STYLE),
+            ],
+        ),
+        html.Div(
+            style=CARD_STYLE,
+            children=[
+                html.Div("Opfer pro Jahr (Ø)", style=KPI_LABEL_STYLE),
+                html.Div(id="kpi-victims-per-year", style=KPI_VALUE_STYLE),
+            ],
+        ),
+        html.Div(
+            style=CARD_STYLE,
+            children=[
+                html.Div("Verhältnis männlich / weiblich", style=KPI_LABEL_STYLE),
+                html.Div(id="kpi-male-female", style=KPI_VALUE_STYLE),
+            ],
+        ),
+        html.Div(
+            style=CARD_STYLE,
+            children=[
+                html.Div("Unter 18 / Erwachsene", style=KPI_LABEL_STYLE),
+                html.Div(id="kpi-under18-adults", style=KPI_VALUE_STYLE),
+            ],
+        ),
+        html.Div(
+            style=CARD_STYLE,
+            children=[
+                html.Div("Anzahl Deliktsgruppen", style=KPI_LABEL_STYLE),
+                html.Div(id="kpi-crime-types", style=KPI_VALUE_STYLE),
+            ],
+        ),
+        html.Div(
+            style=CARD_STYLE,
+            children=[
+                html.Div("Anzahl betroffene Gemeinden", style=KPI_LABEL_STYLE),
+                html.Div(id="kpi-municipalities", style=KPI_VALUE_STYLE),
+            ],
+        ),
+    ],
+),
             html.Br(),
             dcc.Graph(id="trend"),
             html.Br(),
@@ -750,10 +811,12 @@ def render_page(path):
 
 # --------- OVERVIEW CALLBACK ---------
 @app.callback(
-    Output("kpi-total", "children"),
-    Output("kpi-avg", "children"),
-    Output("kpi-top", "children"),
-    Output("kpi-total-crime", "children"),
+    Output("kpi-total-victims", "children"),
+    Output("kpi-victims-per-year", "children"),
+    Output("kpi-male-female", "children"),
+    Output("kpi-under18-adults", "children"),
+    Output("kpi-crime-types", "children"),
+    Output("kpi-municipalities", "children"),
     Output("trend", "figure"),
     Output("top5", "figure"),
     Output("donut", "figure"),
@@ -762,10 +825,26 @@ def render_page(path):
 )
 def update_overview(years, states):
     d = filter_data(years or YEARS, [], states or [])
-    k1, k2, k3, k4 = build_kpis(d)
-    return k1, k2, k3, k4, fig_trend(d), fig_top5(d), fig_donut(d)
+    (
+        total_victims,
+        victims_per_year,
+        male_female,
+        under18_adults,
+        crime_types,
+        municipalities,
+    ) = build_kpis(d)
 
-
+    return (
+        total_victims,
+        victims_per_year,
+        male_female,
+        under18_adults,
+        crime_types,
+        municipalities,
+        fig_trend(d),
+        fig_top5(d),
+        fig_donut(d),
+    )
 # --------- GEOGRAPHIC CALLBACK ---------
 @app.callback(
     Output("map", "figure"),
