@@ -59,7 +59,7 @@ CARD_STYLE = {
 
 KPI_VALUE_STYLE = {"fontSize": "26px", "fontWeight": "bold"}
 KPI_LABEL_STYLE = {"fontSize": "13px", "opacity": 0.8}
-
+STANDARD_HEIGHT = 700
 # --------- DATA META ---------
 STATE_MAP = {
     1: "Schleswig-Holstein",
@@ -253,7 +253,7 @@ def fig_top5(d):
         y="Straftat_kurz",
         orientation="h",
         color="Oper insgesamt",
-        color_continuous_scale="Blues",
+        color_continuous_scale="YlOrRd",
         title="Top 5 Deliktsgruppen nach Opferzahl",
         labels={"Oper insgesamt": "Opferzahl", "Straftat_kurz": "Deliktsgruppe"},
     )
@@ -262,19 +262,26 @@ def fig_top5(d):
 
 
 def fig_donut(d):
+    """
+    Statt Donut: Treemap zur Darstellung der Deliktsstruktur.
+    Besser lesbar bei vielen Kategorien.
+    """
     d2 = d[d["Straftat_kurz"] != "Straftaten insgesamt"]
     if d2.empty:
         return empty_fig()
+
     g = d2.groupby("Straftat_kurz")["Oper insgesamt"].sum().reset_index()
-    fig = px.pie(
+
+    fig = px.treemap(
         g,
+        path=["Straftat_kurz"],
         values="Oper insgesamt",
-        names="Straftat_kurz",
-        hole=0.45,
-        color_discrete_sequence=px.colors.qualitative.Set2,
-        title="Struktur der Deliktsgruppen",
+        color="Oper insgesamt",
+        color_continuous_scale="Turbo",  # oder 'Viridis' für neutraler Look
+        title="Struktur der Deliktsgruppen (Treemap)",
     )
-    fig.update_traces(textposition="inside", textinfo="percent+label")
+
+    fig.update_layout(margin=dict(t=50, l=0, r=0, b=0))
     return fig
 
 
@@ -389,7 +396,9 @@ def fig_heatmap(d):
     d2 = d[d["Straftat_kurz"] != "Straftaten insgesamt"]
     if d2.empty:
         return empty_fig()
+
     g = d2.groupby(["Straftat_kurz", "Jahr"])["Oper insgesamt"].sum().reset_index()
+
     fig = px.density_heatmap(
         g,
         x="Jahr",
@@ -399,7 +408,14 @@ def fig_heatmap(d):
         title="Heatmap – Opferzahlen nach Deliktsgruppe und Jahr",
         labels={"Oper insgesamt": "Opferzahl", "Straftat_kurz": "Deliktsgruppe"},
     )
+
     fig.update_yaxes(autorange="reversed")
+
+    # ✅ FORCE FULL SIZE
+    fig.update_layout(
+        height=750,
+    )
+
     return fig
 
 
@@ -660,17 +676,26 @@ def layout_geo():
 def layout_crime():
     return html.Div(
         children=[
-            html.H2("Deliktskategorien", className="mb-3"),
+            html.H2("Crime Types (Deliktsstruktur)", className="mb-3"),
             html.P(
                 "Analyse der Opferzahlen nach Deliktsgruppen sowie der Altersstruktur der Opfer.",
                 className="text-muted",
             ),
-            dcc.Graph(id="heat"),
+
+            dcc.Graph(id="top5-crime", style={"width": "100%", "height": f"{STANDARD_HEIGHT}px"}),
             html.Br(),
-            dcc.Graph(id="stacked"),
+
+            dcc.Graph(id="donut-crime", style={"width": "100%", "height": f"{STANDARD_HEIGHT}px"}),
             html.Br(),
+
+            dcc.Graph(id="heat", style={"width": "100%", "height": f"{STANDARD_HEIGHT}px"}),
+            html.Br(),
+
+            dcc.Graph(id="stacked", style={"width": "100%", "height": f"{STANDARD_HEIGHT}px"}),
+            html.Br(),
+
             html.Div(
-                style={"maxWidth": "400px"},
+                style={"maxWidth": "500px"},
                 children=[
                     html.Label("Deliktsgruppe für Altersanalyse"),
                     dcc.Dropdown(
@@ -682,7 +707,8 @@ def layout_crime():
                 ],
             ),
             html.Br(),
-            dcc.Graph(id="agechart"),
+
+            dcc.Graph(id="agechart", style={"width": "100%", "height": f"{STANDARD_HEIGHT}px"}),
         ]
     )
 
@@ -822,6 +848,8 @@ def update_geo(years, crimes, states):
     Output("heat", "figure"),
     Output("stacked", "figure"),
     Output("agechart", "figure"),
+    Output("top5-crime", "figure"),   # NEW
+    Output("donut-crime", "figure"),  # NEW
     Input("filter-year", "value"),
     Input("filter-crime", "value"),
     Input("filter-state", "value"),
@@ -829,7 +857,15 @@ def update_geo(years, crimes, states):
 )
 def update_crime(years, crimes, states, age_crime_sel):
     d = filter_data(years or YEARS, crimes or [], states or [])
-    return fig_heatmap(d), fig_stacked(d), fig_age(d, age_crime_sel)
+
+    heat_fig = fig_heatmap(d)
+    stacked_fig = fig_stacked(d)
+    age_fig = fig_age(d, age_crime_sel)
+
+    top5_fig = fig_top5(d)      # reuse overview logic
+    donut_fig = fig_donut(d)    # reuse overview logic
+
+    return heat_fig, stacked_fig, age_fig, top5_fig, donut_fig
 
 
 # --------- TEMPORAL CALLBACK ---------
