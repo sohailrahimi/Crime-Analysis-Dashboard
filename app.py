@@ -349,6 +349,8 @@ def fig_donut(d):
         title="Struktur der Deliktsgruppen (Treemap)",
     )
 
+    
+
     fig.update_layout(margin=dict(t=50, l=0, r=0, b=0))
     return fig
 
@@ -589,7 +591,7 @@ def fig_heatmap(d):
 
     # ✅ FORCE FULL SIZE
     fig.update_layout(
-        height=750,
+        height=750,  
     )
 
     return fig
@@ -731,6 +733,7 @@ def sidebar_layout(path):
                             nav_link("Geografisch", "/geo"),
                             nav_link("Deliktskategorien", "/crime"),
                             nav_link("Zeitliche Einblicke", "/temporal"),
+                            nav_link("Trends", "/trends"),
                         ],
                         vertical=True,
                         pills=True,
@@ -934,6 +937,392 @@ def layout_temporal():
         ]
     )
 
+def layout_trends():
+    return html.Div(
+        children=[
+            html.H2("Trends", className="mb-3"),
+
+            # ---------- TREND 1: Städte mit stärkstem Anstieg ----------
+            html.H3("1. Which Cities Are Becoming More Dangerous? (2019–2024)"),
+            html.P(
+                "Städte mit dem stärksten Anstieg der Opferzahlen (2019–2024).",
+                className="text-muted",
+            ),
+
+            html.Div(
+                style={
+                    "display": "flex",
+                    "gap": "16px",
+                    "maxWidth": "600px",
+                    "marginBottom": "20px",
+                },
+                children=[
+                    html.Div(
+                        style={"flex": "1"},
+                        children=[
+                            html.Label("Anzahl Städte"),
+                            dcc.Dropdown(
+                                id="city-count",
+                                options=[
+                                    {"label": "Top 5", "value": 5},
+                                    {"label": "Top 10", "value": 10},
+                                    {"label": "Top 15", "value": 15},
+                                    {"label": "Top 20", "value": 20},
+                                ],
+                                value=10,
+                                clearable=False,
+                            ),
+                        ],
+                    ),
+                    html.Div(
+                        style={"flex": "1"},
+                        children=[
+                            html.Label("Farbschema"),
+                            dcc.Dropdown(
+                                id="city-color-scale",
+                                options=[
+                                    {"label": "Orange-Rot (OrRd)", "value": "OrRd"},
+                                    {"label": "Rot (Reds)", "value": "Reds"},
+                                    {"label": "Grün-Blau (YlGnBu)", "value": "YlGnBu"},
+                                    {"label": "Blau (Blues)", "value": "Blues"},
+                                    {"label": "Lila (Purples)", "value": "Purples"},
+                                    {"label": "Viridis", "value": "Viridis"},
+                                ],
+                                value="OrRd",
+                                clearable=False,
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+
+            dcc.Graph(
+                id="city-danger",
+                style={"width": "100%", "height": f"{STANDARD_HEIGHT}px"},
+            ),
+
+            html.Hr(style={"margin": "32px 0"}),
+
+            # ---------- TREND 3: Kinder 0–14 ----------
+            html.H3("2. Which Cities Are Safest / Most Dangerous for Children (0–14)?"),
+            html.P(
+                "Ranking der Städte nach Anzahl der Opfer im Alter von 0–14 Jahren.",
+                className="text-muted",
+            ),
+
+            html.Div(
+                style={
+                    "display": "flex",
+                    "gap": "16px",
+                    "maxWidth": "600px",
+                    "marginBottom": "20px",
+                },
+                children=[
+                    html.Div(
+                        style={"flex": "1"},
+                        children=[
+                            html.Label("Anzahl Städte (Top N)"),
+                            dcc.Dropdown(
+                                id="trend-children-topn",
+                                options=[
+                                    {"label": "Top 5", "value": 5},
+                                    {"label": "Top 10", "value": 10},
+                                    {"label": "Top 15", "value": 15},
+                                    {"label": "Top 20", "value": 20},
+                                    {"label": "Top 30", "value": 30},
+                                    {"label": "Top 50", "value": 50},
+                                    {"label": "Top 100", "value": 100},
+                                    {"label": "Alle Städte", "value": -1},
+                                ],
+                                value=-1,
+                                clearable=False,
+                            ),
+                        ],
+                    ),
+                    html.Div(
+                        style={"flex": "1"},
+                        children=[
+                            html.Label("Ansicht"),
+                            dcc.Dropdown(
+                                id="trend-children-mode",
+                                options=[
+                                    {
+                                        "label": "Gefährlichste Städte (meiste Kinderopfer)",
+                                        "value": "dangerous",
+                                    },
+                                    {
+                                        "label": "Sicherste Städte (wenigste Kinderopfer)",
+                                        "value": "safe",
+                                    },
+                                ],
+                                value="dangerous",
+                                clearable=False,
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+
+            dcc.Graph(
+                id="trend-children-cities",
+                style={
+                     "width": "100%",
+                     "maxWidth": "100%",              # ensure no internal limit
+                     "height": f"{STANDARD_HEIGHT}px"
+                 },
+                config={"responsive": True},         # let Plotly stretch with container
+            ),
+
+            html.H3("3. Steigt die Gewalt gegen Frauen an?"),
+            dcc.Graph(id="trend-women-violence", style={"height": "500px"}),
+        ]
+    )
+
+def fig_city_danger(d, top_n=10, color_scale="OrRd"):
+    if d.empty:
+        return empty_fig("Keine Daten verfügbar")
+
+    g = d.groupby(["Region", "Jahr"])["Oper insgesamt"].sum().reset_index()
+    years = sorted(g["Jahr"].unique())
+    if len(years) < 2:
+        return empty_fig("Mindestens zwei Jahre notwendig (z.B. 2019 und 2024).")
+
+    first, last = years[0], years[-1]
+
+    start = g[g["Jahr"] == first].set_index("Region")["Oper insgesamt"]
+    end = g[g["Jahr"] == last].set_index("Region")["Oper insgesamt"]
+
+    diff = (end - start).dropna().reset_index()
+    diff.columns = ["Region", "Delta"]
+
+    diff = diff[diff["Delta"] > 0]
+    diff = diff.sort_values("Delta", ascending=False)
+
+    if top_n is not None and top_n > 0:
+        diff = diff.head(top_n)
+
+    fig = px.bar(
+        diff,
+        x="Delta",
+        y="Region",
+        orientation="h",
+        color="Delta",
+        color_continuous_scale=color_scale,
+        labels={
+            "Delta": f"Zunahme Opfer {first}–{last}",
+            "Region": "Region / Stadt",
+        },
+        title=(
+            f"Städte mit größtem Opferanstieg ({first}–{last}) – Alle Städte"
+            if top_n == -1
+            else f"Städte mit größtem Opferanstieg ({first}–{last}) – Top {top_n}"
+        ),
+    )
+
+    # 🔑 This line makes the highest value appear at the TOP
+    fig.update_yaxes(autorange="reversed")
+
+    fig.update_layout(
+        coloraxis_showscale=False,
+        height=STANDARD_HEIGHT,
+    )
+
+    return fig
+
+
+# Which city is safer or dangerous for children function (now as risk scatter)
+def fig_children_ranking(d, top_n=10, mode="dangerous"):
+    """
+    Karte für Kinderopfer (0–14) auf Stadt-/Landkreisebene
+    mit gleichem Stil wie die Geografie-Ansicht (px.choropleth_map).
+
+    mode = "dangerous" -> Städte mit den meisten Kinderopfern (Top N, rot)
+    mode = "safe"      -> Städte mit den wenigsten Kinderopfern (Top N, grün)
+    """
+    if d.empty or gdf_cities is None:
+        return empty_fig("Keine Geodaten für Kinder (0–14) verfügbar.")
+
+    col_children = AGE_COLS["Kinder <14"]
+    if col_children not in d.columns:
+        return empty_fig("Keine Daten für Kinder (0–14) verfügbar.")
+
+    # --- Kinderopfer nach Region + Bundesland ---
+    g_children = (
+        d.groupby(["Region", "Bundesland"])[col_children]
+        .sum()
+        .reset_index()
+        .rename(columns={col_children: "Kinder_0_14"})
+    )
+
+    if g_children.empty:
+        return empty_fig("Zu wenige Daten für Kinder (0–14).")
+
+    # --- Gesamtopfer nach Region + Bundesland (für Hover) ---
+    g_total = (
+        d.groupby(["Region", "Bundesland"])["Oper insgesamt"]
+        .sum()
+        .reset_index()
+        .rename(columns={"Oper insgesamt": "Gesamtopfer"})
+    )
+
+    g = g_children.merge(g_total, on=["Region", "Bundesland"], how="left")
+    g["Gesamtopfer"] = g["Gesamtopfer"].fillna(0)
+
+    # Anteil Kinder an allen Opfern (in %), nur für Tooltip
+    g["Anteil_Kinder"] = np.where(
+        g["Gesamtopfer"] > 0,
+        100 * g["Kinder_0_14"] / g["Gesamtopfer"],
+        0.0,
+    )
+
+    # --- Sortierung nach Modus (gefährlich/sicher) ---
+    ascending = True if mode == "safe" else False
+    g = g.sort_values("Kinder_0_14", ascending=ascending)
+
+    # Top N auswählen (oder alle, falls -1)
+    if top_n is not None and top_n > 0:
+        g = g.head(top_n)
+
+    if g.empty:
+        return empty_fig("Keine Städte für diese Auswahl gefunden.")
+
+    # --- Zuordnung Region ↔ Stadt-Shapes (gdf_cities) ---
+    gdf = gdf_cities.copy()
+    gdf["Kinder_0_14"] = np.nan
+    gdf["Gesamtopfer"] = np.nan
+    gdf["Anteil_Kinder"] = np.nan
+
+    def find_matching_city_idx(region_name, bundesland_name):
+        """Versucht, eine Stadt im Shape-File zu finden, die zur Region passt."""
+        region_lower = str(region_name).lower()
+        subset = gdf[gdf["Bundesland"] == bundesland_name]
+        for idx, city in subset["City"].items():
+            city_lower = str(city).lower()
+            if region_lower in city_lower or city_lower in region_lower:
+                return idx
+        return None
+
+    # Werte in GeoDataFrame schreiben (nur Top-N-Städte)
+    for _, row in g.iterrows():
+        idx = find_matching_city_idx(row["Region"], row["Bundesland"])
+        if idx is not None:
+            gdf.at[idx, "Kinder_0_14"] = row["Kinder_0_14"]
+            gdf.at[idx, "Gesamtopfer"] = row["Gesamtopfer"]
+            gdf.at[idx, "Anteil_Kinder"] = row["Anteil_Kinder"]
+
+    # Nur Städte mit zugeordneten Kinderwerten behalten
+    gdf_plot = gdf.dropna(subset=["Kinder_0_14"]).copy()
+    if gdf_plot.empty:
+        return empty_fig("Keine Zuordnung Stadt ↔ Region möglich.")
+
+    # ID-Spalte für Verbindung GeoJSON ↔ DataFrame
+    gdf_plot = gdf_plot.reset_index().rename(columns={"index": "id"})
+    geojson_data = json.loads(gdf_plot.to_json())
+
+    # Farbskala nach Modus
+    # --------- NEW SET1-STYLE COLOR SYSTEM (categorical feeling) ---------
+
+    # Define Set1 colors (Plotly qualitative palette)
+    set1 = px.colors.qualitative.Set1  # [red, blue, green, purple, orange...]
+
+    # Colors we want to use (stable, distinct, readable)
+    colors = [
+    set1[2],  # green
+    set1[4],  # orange
+    set1[1],  # blue
+    set1[3],  # purple
+    set1[0],  # red
+    ]
+
+    # Build a 5-step discrete scale for numeric values
+    # --- 3-color semantic scale: green → orange → red ---
+    color_scale = [
+        [0.0, "#2ecc71"],   # green (safest)
+        [0.5, "#f39c12"],   # orange (medium)
+        [1.0, "#e74c3c"],   # red (most dangerous)
+    ]
+
+    # Context-dependent title
+    if mode == "safe":
+        title_mode = "sichersten (wenigste Kinderopfer)"
+    else:
+        title_mode = "gefährlichsten (meiste Kinderopfer)"
+
+    # 🔵 Neue Map im Stil des Dash-Beispiels: px.choropleth_map
+    fig = px.choropleth_map(
+        gdf_plot,
+        geojson=geojson_data,
+        locations="id",
+        featureidkey="properties.id",
+        color="Kinder_0_14",
+        hover_name="City",
+        hover_data={
+            "Kinder_0_14": True,
+            "Gesamtopfer": True,
+            "Anteil_Kinder": ":.1f",
+            "Bundesland": True,
+        },
+        color_continuous_scale=color_scale,
+        labels={"Kinder_0_14": "Kinderopfer 0–14"},
+        title=f"Top {top_n} {title_mode} Städte – Kinder (0–14)",
+        center={"lat": 51.0, "lon": 10.2},
+        zoom=4.5,
+        map_style="carto-positron",  # gleiche Stil-Familie wie moderne Dash-Beispiele
+    )
+
+    fig.update_layout(
+        height=STANDARD_HEIGHT,
+        margin={"r": 0, "t": 50, "l": 0, "b": 0},
+        coloraxis_colorbar_title="Kinderopfer 0–14",
+    )
+
+   
+
+    return fig
+
+# viollence agains Women over time 
+def fig_violence_women(d):
+    if d.empty:
+        return empty_fig("Keine Daten verfügbar")
+
+    # violent crime categories
+    violence_categories = [
+        "Sexualstraftaten",
+        "Einfache KV",
+        "Schwere KV",
+        "Gewaltkriminalität",
+        "Raub & Erpressung",
+        "Raub Geschäfte",
+        "Raub auf Straßen",
+        "Raub in Wohnungen",
+    ]
+
+    d2 = d[d["Straftat_kurz"].isin(violence_categories)]
+
+    if d2.empty:
+        return empty_fig("Keine Daten zur Gewalt gegen Frauen verfügbar")
+
+    g = (
+        d2.groupby("Jahr")["Opfer weiblich"]
+        .sum()
+        .reset_index()
+        .sort_values("Jahr")
+    )
+
+    fig = px.line(
+        g,
+        x="Jahr",
+        y="Opfer weiblich",
+        markers=True,
+        color_discrete_sequence=["#b91c1c"],  # dark red
+        title="Gewalt gegen Frauen im Zeitverlauf (2019–2024)",
+        labels={"Opfer weiblich": "Weibliche Opfer"},
+    )
+
+    fig.update_layout(height=STANDARD_HEIGHT)
+
+    return fig
+
 
 # --------- ROOT LAYOUT (HEADER + SIDEBAR + CONTENT) ---------
 app.layout = html.Div(
@@ -995,6 +1384,8 @@ def render_page(path):
         return layout_geo()
     if path == "/crime":
         return layout_crime()
+    if path == "/trends":                     # 🆕 NEW
+        return layout_trends()
     if path == "/temporal":
         return layout_temporal()
     return html.Div([html.H2("404 – Seite nicht gefunden")])
@@ -1129,6 +1520,54 @@ def update_crime(years, crimes, states, age_crime_sel):
     donut_fig = fig_donut(d)
 
     return heat_fig, stacked_fig, age_fig, top5_fig, donut_fig
+
+
+# Trends Callback (city danger)
+@app.callback(
+    Output("city-danger", "figure"),
+    Input("filter-year", "value"),
+    Input("filter-crime", "value"),
+    Input("filter-state", "value"),
+    Input("city-count", "value"),
+    Input("city-color-scale", "value"),
+)
+def update_city_danger(years, crimes, states, top_n, color_scale):
+    d = filter_data(years or YEARS, crimes or [], states or [])
+    return fig_city_danger(
+        d,
+        top_n=top_n or 10,
+        color_scale=color_scale or "OrRd",
+    )
+
+# Trends Callback: Children 0–14 ranking
+@app.callback(
+    Output("trend-children-cities", "figure"),
+    Input("filter-year", "value"),
+    Input("filter-crime", "value"),
+    Input("filter-state", "value"),
+    Input("trend-children-topn", "value"),
+    Input("trend-children-mode", "value"),
+)
+def update_trend_children_cities(years, crimes, states, top_n, mode):
+    d = filter_data(years or YEARS, crimes or [], states or [])
+
+    return fig_children_ranking(
+        d,
+        top_n=top_n or 10,
+        mode=mode or "dangerous",
+    )
+
+
+#viollence against Women callback
+@app.callback(
+    Output("trend-women-violence", "figure"),
+    Input("filter-year", "value"),
+    Input("filter-crime", "value"),
+    Input("filter-state", "value"),
+)
+def update_trend_violence_women(years, crimes, states):
+    d = filter_data(years or YEARS, crimes or [], states or [])
+    return fig_violence_women(d)
 
 
 # --------- TEMPORAL CALLBACK ---------
