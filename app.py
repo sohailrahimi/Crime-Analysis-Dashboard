@@ -580,7 +580,7 @@ def fig_geo_state_bar(d):
 
     # Layout styling
     fig.update_layout(
-        title="Opfer nach Bundesland – Lollipop Chart",
+        title="Opfer nach Bundesland",
         xaxis_title="Opferzahl (ohne 'Straftaten insgesamt')",
         yaxis_title="Bundesland",
         height=550,
