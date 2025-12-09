@@ -1,3 +1,4 @@
+
 import json
 from urllib.request import urlopen
 
@@ -356,69 +357,68 @@ def fig_donut(d):
 
 
 # --------- GEOGRAPHIC FIGURES ---------
-def prepare_state_geo_data(d):
-    """Prepare state-level geographic data"""
+def prepare_state_geo_data(d, value_col="Oper insgesamt"):
+    """Prepare state-level geographic data for the given metric column."""
     if d.empty or gdf_states is None:
         return None, None
-    
-    # Filter data
+
     victims_df = d[d["Straftat_kurz"] != "Straftaten insgesamt"]
-    
-    # Aggregate by state
+
+    if value_col not in victims_df.columns:
+        value_col = "Oper insgesamt"
+
     victims = (
-        victims_df.groupby("Bundesland")["Oper insgesamt"]
+        victims_df.groupby("Bundesland")[value_col]
         .sum()
         .reset_index()
-        .rename(columns={"Oper insgesamt": "Opfer_insgesamt"})
+        .rename(columns={value_col: "Opfer_insgesamt"})
     )
-    
-    # Merge with geographic data
+
     gdf_merged = gdf_states.merge(victims, on="Bundesland", how="left")
     gdf_merged["Opfer_insgesamt"] = gdf_merged["Opfer_insgesamt"].fillna(0)
-    
-    # Create GeoJSON
+
     geojson_data = json.loads(gdf_merged.to_json())
-    
     return gdf_merged, geojson_data
 
+def prepare_city_geo_data(d, selected_state=None, value_col="Oper insgesamt"):
+    """
+    Prepare city-level geographic data.
+    - selected_state = None  -> alle Städte in Deutschland
+    - selected_state = Name  -> nur Städte dieses Bundeslandes
+    """
+    if d.empty or gdf_cities is None:
+        return None, None, None
 
-def prepare_city_geo_data(d, selected_state):
-    """Prepare city-level geographic data for selected state"""
-    if d.empty or gdf_cities is None or not selected_state:
+    if selected_state:
+        state_data = d[d["Bundesland"] == selected_state]
+        gdf_subset = gdf_cities[gdf_cities["Bundesland"] == selected_state]
+    else:
+        state_data = d
+        gdf_subset = gdf_cities
+
+    if state_data.empty or gdf_subset.empty:
         return None, None, None
-    
-    # Filter data for selected state
-    state_data = d[d["Bundesland"] == selected_state]
-    if state_data.empty:
-        return None, None, None
-    
-    # Filter geographic data for selected state
-    gdf_state_cities = gdf_cities[gdf_cities["Bundesland"] == selected_state]
-    
-    if gdf_state_cities.empty:
-        return None, None, None
-    
-    # Aggregate victim data by region
+
+    if value_col not in state_data.columns:
+        value_col = "Oper insgesamt"
+
     city_victims = (
-        state_data.groupby("Region")["Oper insgesamt"]
+        state_data.groupby("Region")[value_col]
         .sum()
         .reset_index()
-        .rename(columns={"Oper insgesamt": "Opfer_insgesamt"})
+        .rename(columns={value_col: "Opfer_insgesamt"})
     )
-    
-    # Try to match city names
-    gdf_merged = gdf_state_cities.copy()
-    
-    # Simple matching: check if any part of the city name matches
+
+    gdf_merged = gdf_subset.copy()
+
     def find_matching_city(region_name):
         region_lower = str(region_name).lower()
-        for city in gdf_state_cities["City"].unique():
+        for city in gdf_subset["City"].unique():
             city_lower = str(city).lower()
             if region_lower in city_lower or city_lower in region_lower:
                 return city
         return None
-    
-    # Create mapping
+
     city_mapping = {}
     for _, row in city_victims.iterrows():
         region = row["Region"]
@@ -426,103 +426,135 @@ def prepare_city_geo_data(d, selected_state):
         if matching_city:
             city_mapping[matching_city] = row["Opfer_insgesamt"]
         else:
-            # Store with original region name
             city_mapping[region] = row["Opfer_insgesamt"]
-    
-    # Map values to GeoDataFrame
+
     gdf_merged["Opfer_insgesamt"] = gdf_merged["City"].map(city_mapping).fillna(0)
-    
-    # Create GeoJSON
-    geojson_data = json.loads(gdf_merged.to_json())
-    
-    # Calculate center - FIXED: Use proper projection for centroid calculation
-    # First project to a meter-based CRS (UTM zone 32N for Germany)
+
     try:
-        gdf_projected = gdf_merged.to_crs("EPSG:32632")  # UTM zone 32N
+        gdf_projected = gdf_merged.to_crs("EPSG:32632")
         centroid = gdf_projected.geometry.centroid
-        # Convert back to WGS84 (lat/lon)
         centroid_wgs84 = centroid.to_crs("EPSG:4326")
         center_lat = centroid_wgs84.y.mean()
         center_lon = centroid_wgs84.x.mean()
     except Exception as e:
-        print(f"Warning: Could not calculate proper centroid for {selected_state}, using simple mean: {e}")
-        # Fallback: use simple mean of coordinates
+        print(
+            f"Warning: Could not calculate proper centroid for {selected_state or 'Deutschland'}, using simple mean: {e}"
+        )
         center_lat = gdf_merged.geometry.centroid.y.mean()
         center_lon = gdf_merged.geometry.centroid.x.mean()
-    
+
+    geojson_data = json.loads(gdf_merged.to_json())
     return gdf_merged, geojson_data, (center_lat, center_lon)
 
+# ----- COLOR SCALES FOR SAFETY MODE -----
+COLOR_SCALE_UNSAFE = "Reds"    
+COLOR_SCALE_SAFE = list(reversed(px.colors.sequential.Greens))  # reversed greens
+COLOR_SCALE_ALL = "OrRd"
 
-def fig_geo_map(d, selected_state=None):
-    """Create interactive map using the new choropleth_map function"""
+
+
+def fig_geo_map(d, selected_state=None, city_mode="bundesland", age_group="all", safety_mode="all"):
+    """
+    Handles BOTH Bundesländer & City view with safety-mode coloring.
+    safety_mode:
+        - "safe"   → green scale (low = good)
+        - "unsafe" → red scale (high = dangerous)
+        - "all"    → neutral scale
+    """
+
     if d.empty or gdf_states is None:
         return empty_fig("Keine Geodaten verfügbar")
-    
-    if selected_state:
-        # City-level view for selected state
-        gdf_data, geojson_data, center_coords = prepare_city_geo_data(d, selected_state)
-        
-        if gdf_data is None or geojson_data is None:
-            return empty_fig(f"Keine Geodaten für {selected_state}")
-        
-        center_lat, center_lon = center_coords
-        
-        # Determine zoom level based on state size
-        zoom_levels = {
-            "Berlin": 10, "Bremen": 10, "Hamburg": 10, "Saarland": 9,
-        }
-        zoom = zoom_levels.get(selected_state, 7)
-        
-        # Use the new choropleth_map function
-        fig = px.choropleth_map(
-            gdf_data,
-            geojson=geojson_data,
-            locations=gdf_data.index,
-            color="Opfer_insgesamt",
-            hover_name="City",
-            hover_data={"Opfer_insgesamt": True, "Bundesland": False},
-            opacity=0.7,
-            map_style="open-street-map",
-            color_continuous_scale="Reds",
-            zoom=zoom,
-            center={"lat": center_lat, "lon": center_lon},
-            title=f"Opfer in {selected_state} - Städte/Landkreise"
-        )
-        
-        # Disable click events on cities - only Bundesland clicks are allowed
-        fig.update_layout(clickmode='none')  # Disable all click interactions
-        
+
+    # ----- Select metric column (age-aware) -----
+    value_col = "Oper insgesamt"
+    age_label_for_title = "alle Altersgruppen"
+    if age_group != "all" and age_group in AGE_COLS:
+        candidate = AGE_COLS[age_group]
+        if candidate in d.columns:
+            value_col = candidate
+            age_label_for_title = age_group
+
+    # ----- Choose color scale -----
+    if safety_mode == "safe":
+        color_scale = COLOR_SCALE_SAFE   # greens
+        ascending = True                # safest first
+    elif safety_mode == "unsafe":
+        color_scale = COLOR_SCALE_UNSAFE  # reds
+        ascending = False
     else:
-        # State-level view for all Germany
-        gdf_data, geojson_data = prepare_state_geo_data(d)
-        
-        if gdf_data is None or geojson_data is None:
-            return empty_fig()
-        
-        # Use the new choropleth_map function
+        color_scale = COLOR_SCALE_ALL   # orange neutral
+        ascending = False
+
+    # ----------------------------------------------------
+    # ✅ BUNDESLÄNDER VIEW ----------------------------------------------------
+    # ----------------------------------------------------
+    if city_mode == "bundesland" and selected_state is None:
+        gdf_states_data, geojson_data = prepare_state_geo_data(d, value_col)
+        if gdf_states_data is None:
+            return empty_fig("Keine Bundeslanddaten verfügbar")
+
+        # Sort by safe/unsafe
+        gdf_states_data = gdf_states_data.sort_values("Opfer_insgesamt", ascending=ascending)
+
         fig = px.choropleth_map(
-            gdf_data,
+            gdf_states_data,
             geojson=geojson_data,
-            locations=gdf_data.index,
+            locations=gdf_states_data.index,
             color="Opfer_insgesamt",
             hover_name="Bundesland",
             hover_data={"Opfer_insgesamt": True},
+
             opacity=0.7,
             map_style="open-street-map",
-            color_continuous_scale="Reds",
+            color_continuous_scale=color_scale,
             zoom=4.5,
             center={"lat": 51.0, "lon": 10.2},
-            title="Opfer nach Bundesland ",
+            title=f"Opfer nach Bundesland – {age_label_for_title}",
         )
-        
-        # Enable click events only at state level
-        fig.update_layout(clickmode='event+select')
-    
-    fig.update_layout(
-        margin={"r": 0, "t": 50, "l": 0, "b": 0},
-        coloraxis_colorbar_title="Opfer gesamt",
+        fig.update_layout(
+            margin={"l": 0, "r": 0, "t": 0, "b": 0},
+            height=500,
+            clickmode="event+select"
+)
+
+        return fig
+
+    # ----------------------------------------------------
+    # ✅ CITY VIEW (all Germany OR inside Bundesland)
+    # ----------------------------------------------------
+    gdf_cities_data, geojson_data, center = prepare_city_geo_data(d, selected_state, value_col)
+    if gdf_cities_data is None:
+        return empty_fig("Keine Städtedaten verfügbar")
+
+    center_lat, center_lon = center
+
+    # Apply Top N or all
+    gdf_plot = gdf_cities_data.copy()
+    if city_mode != "all" and isinstance(city_mode, int):
+        gdf_plot = gdf_plot.sort_values("Opfer_insgesamt", ascending=ascending).head(city_mode)
+
+    fig = px.choropleth_map(
+        gdf_plot,
+        geojson=geojson_data,
+        locations=gdf_plot.index,
+        color="Opfer_insgesamt",
+        hover_name="City",
+        hover_data={"Opfer_insgesamt": True, "Bundesland": True},
+        opacity=0.8,
+        map_style="open-street-map",
+        color_continuous_scale=color_scale,
+        zoom=6 if selected_state else 5,
+        center={"lat": center_lat, "lon": center_lon},
+        title=f"Opfer – Städteansicht – {age_label_for_title}",
     )
-    
+    fig.update_layout(
+        margin={"l": 0, "r": 0, "t": 0, "b": 0},
+        height=550,
+        clickmode="none"
+)
+
+
+
     return fig
 
 def fig_geo_state_bar(d):
@@ -583,7 +615,7 @@ def fig_geo_state_bar(d):
         title="Opfer nach Bundesland",
         xaxis_title="Opferzahl (ohne 'Straftaten insgesamt')",
         yaxis_title="Bundesland",
-        height=550,
+        height=500,
         margin=dict(l=80, r=20, t=60, b=40),
         plot_bgcolor="white",
     )
@@ -895,13 +927,13 @@ def layout_overview():
         ]
     )
 
-
 def layout_geo():
     return html.Div(
         children=[
             html.H2("Geografische Analyse", className="mb-3"),
             html.P(
-                "Vergleich der Opferzahlen nach Bundesland und Region. Klicken Sie auf ein Bundesland, um die Städte/Landkreise anzuzeigen.",
+                "Vergleich der Opferzahlen nach Bundesland und Städten/Landkreisen. "
+                "Klicken Sie auf ein Bundesland, um die Städteansicht aufzurufen.",
                 className="text-muted",
             ),
             html.Div(
@@ -914,26 +946,109 @@ def layout_geo():
                     "borderLeft": "4px solid #3b82f6"
                 },
                 children=[
-                    html.Div(id="current-state-display", children="Aktuelle Ansicht: Deutschland"),
-                    html.Div(id="state-back-button", style={"display": "none"}, children=[
-                        html.Button(
-                            "← Zurück zur Deutschland-Ansicht",
-                            id="back-to-germany",
-                            n_clicks=0,
-                            style={
-                                "backgroundColor": "#3b82f6",
-                                "color": "white",
-                                "border": "none",
-                                "padding": "5px 10px",
-                                "borderRadius": "3px",
-                                "cursor": "pointer",
-                                "marginTop": "10px"
-                            }
-                        )
-                    ])
+                    html.Div(
+                        id="current-state-display",
+                        children="Aktuelle Ansicht: Deutschland – Ebene: Bundesländer"
+                    ),
+                    html.Div(
+                        id="state-back-button",
+                        style={"display": "none"},
+                        children=[
+                            html.Button(
+                                "← Zurück zur Deutschland-Ansicht",
+                                id="back-to-germany",
+                                n_clicks=0,
+                                style={
+                                    "backgroundColor": "#3b82f6",
+                                    "color": "white",
+                                    "border": "none",
+                                    "padding": "5px 10px",
+                                    "borderRadius": "3px",
+                                    "cursor": "pointer",
+                                    "marginTop": "10px"
+                                }
+                            )
+                        ]
+                    )
                 ]
             ),
+
+            # Store bleibt, weil wir weiterhin per Klick Bundesland auswählen
             dcc.Store(id="selected-state-store", data=None),
+
+            # ===== FILTERLEISTE ÜBER DER KARTE =====
+            html.Div(
+                style={
+                    "display": "flex",
+                    "gap": "16px",
+                    "marginBottom": "20px",
+                    "padding": "12px",
+                    "backgroundColor": "#eef2ff",
+                    "borderRadius": "8px",
+                    "border": "1px solid #c7d2fe",
+                },
+                children=[
+                    # 1) City-Modus / Top N
+                    html.Div(
+                        style={"flex": "1"},
+                        children=[
+                            html.Label("Auswahl"),
+                            dcc.Dropdown(
+                                id="geo-city-mode",
+                                options=[
+                                    {"label": "Bundesländer ", "value": "bundesland"},
+                                    {"label": "Alle Städte", "value": "all"},
+                                    {"label": "Top 10 Städte", "value": 10},
+                                    {"label": "Top 20 Städte", "value": 20},
+                                    {"label": "Top 50 Städte", "value": 50},
+                                    {"label": "Top 100 Städte", "value": 100},
+                                ],
+                                value="bundesland",  # Standard: Bundesländer-Ansicht
+                                clearable=False,
+                            ),
+                        ],
+                    ),
+                    # 2) Altersgruppe
+                    html.Div(
+                        style={"flex": "1"},
+                        children=[
+                            html.Label("Altersgruppe"),
+                            dcc.Dropdown(
+                                id="geo-age-group",
+                                options=(
+                                    [{"label": "Alle Altersgruppen", "value": "all"}]
+                                    + [
+                                        {"label": label, "value": label}
+                                        for label in AGE_COLS.keys()
+                                    ]
+                                ),
+                                value="all",  # Standard: alle Altersgruppen
+                                clearable=False,
+                            ),
+                        ],
+                    ),
+                    # 3) Safe / Unsafe
+                    html.Div(
+                        style={"flex": "1"},
+                        children=[
+                            html.Label("Modus"),
+                            dcc.Dropdown(
+                            id="geo-safety-mode",
+                             options=[
+                            {"label": "Alle", "value": "all"},
+                            {"label": "Gefährlich", "value": "unsafe"},
+                            {"label": "Sicher", "value": "safe"},
+                                      ],
+                            value="all",
+                            clearable=False,
+                            ),
+
+                        ],
+                    ),
+                ],
+            ),
+            # ===== ENDE FILTERLEISTE =====
+
             dcc.Graph(id="map"),
             html.Br(),
             dcc.Graph(id="statebar"),
@@ -941,6 +1056,8 @@ def layout_geo():
             dcc.Graph(id="topregions"),
         ]
     )
+         
+
 
 
 def layout_crime():
@@ -1528,7 +1645,6 @@ def update_selected_state(click_data, back_clicks, filter_states, current_state)
     # clicking on the map should do nothing
     return current_state
 
-
 @app.callback(
     Output("map", "figure"),
     Output("statebar", "figure"),
@@ -1539,25 +1655,39 @@ def update_selected_state(click_data, back_clicks, filter_states, current_state)
     Input("filter-crime", "value"),
     Input("filter-state", "value"),
     Input("selected-state-store", "data"),
+    Input("geo-city-mode", "value"),
+    Input("geo-age-group", "value"),
+    Input("geo-safety-mode", "value"),
 )
-def update_geo_components(years, crimes, states, selected_state):
-    """Update all geographic components"""
+def update_geo_components(
+    years, crimes, states, selected_state, city_mode, age_group, safety_mode
+):
     d = filter_data(years or YEARS, crimes or [], states or [])
-    
-    # Create figures - only 3 charts now
-    map_fig = fig_geo_map(d, selected_state)
+
+    map_fig = fig_geo_map(
+        d,
+        selected_state=selected_state,
+        city_mode=city_mode,
+        age_group=age_group,
+        safety_mode=safety_mode,
+    )
+
     state_bar_fig = fig_geo_state_bar(d)
     top_regions_fig = fig_geo_top(d)
-    
-    # Update display text and back button visibility
+
+    # Update info text
     if selected_state:
-        display_text = f"Aktuelle Ansicht: {selected_state} (Städte/Landkreise) - Kein weiterer Klick möglich"
-        back_button_style = {"display": "block"}
+        text = f"Aktuelle Ansicht: {selected_state} – Städteansicht"
+        back_style = {"display": "block"}
     else:
-        display_text = "Aktuelle Ansicht: Deutschland (übersicht) - Klicken Sie auf ein Bundesland"
-        back_button_style = {"display": "none"}
-    
-    return map_fig, state_bar_fig, top_regions_fig, display_text, back_button_style
+        text = (
+            "Aktuelle Ansicht: Deutschland – Bundesländer"
+            if city_mode == "bundesland"
+            else "Aktuelle Ansicht: Deutschland – Städte"
+        )
+        back_style = {"display": "none"}
+
+    return map_fig, state_bar_fig, top_regions_fig, text, back_style
 
 
 # --------- CRIME TYPES CALLBACK ---------
@@ -1648,3 +1778,5 @@ def update_temporal(years, crimes, states):
 
 if __name__ == "__main__":
     app.run(debug=True)
+
+
