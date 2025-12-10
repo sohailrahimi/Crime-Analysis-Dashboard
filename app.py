@@ -1,4 +1,3 @@
-
 import json
 from urllib.request import urlopen
 
@@ -357,7 +356,7 @@ def fig_donut(d):
 
 
 # --------- GEOGRAPHIC FIGURES ---------
-def prepare_state_geo_data(d, value_col="Oper insgesamt"):
+def prepare_state_geo_data(d, value_col="Oper insgesamt", age_group_col=None):
     """Prepare state-level geographic data for the given metric column."""
     if d.empty or gdf_states is None:
         return None, None
@@ -367,20 +366,41 @@ def prepare_state_geo_data(d, value_col="Oper insgesamt"):
     if value_col not in victims_df.columns:
         value_col = "Oper insgesamt"
 
+    # Calculate total victims for each state
     victims = (
         victims_df.groupby("Bundesland")[value_col]
         .sum()
         .reset_index()
         .rename(columns={value_col: "Opfer_insgesamt"})
     )
-
+    
+    # Calculate age group victims if specified
+    age_group_victims = None
+    if age_group_col and age_group_col in victims_df.columns:
+        age_group_victims = (
+            victims_df.groupby("Bundesland")[age_group_col]
+            .sum()
+            .reset_index()
+            .rename(columns={age_group_col: "Opfer_altersgruppe"})
+        )
+    
+    # Merge with geo data
     gdf_merged = gdf_states.merge(victims, on="Bundesland", how="left")
+    
+    # Add age group data if available
+    if age_group_victims is not None:
+        gdf_merged = gdf_merged.merge(age_group_victims, on="Bundesland", how="left")
+    else:
+        gdf_merged["Opfer_altersgruppe"] = 0
+    
+    # Fill NaN values
     gdf_merged["Opfer_insgesamt"] = gdf_merged["Opfer_insgesamt"].fillna(0)
+    gdf_merged["Opfer_altersgruppe"] = gdf_merged["Opfer_altersgruppe"].fillna(0)
 
     geojson_data = json.loads(gdf_merged.to_json())
     return gdf_merged, geojson_data
 
-def prepare_city_geo_data(d, selected_state=None, value_col="Oper insgesamt"):
+def prepare_city_geo_data(d, selected_state=None, value_col="Oper insgesamt", age_group_col=None):
     """
     Prepare city-level geographic data.
     - selected_state = None  -> alle Städte in Deutschland
@@ -402,12 +422,23 @@ def prepare_city_geo_data(d, selected_state=None, value_col="Oper insgesamt"):
     if value_col not in state_data.columns:
         value_col = "Oper insgesamt"
 
+    # Calculate total victims for each city/region
     city_victims = (
         state_data.groupby("Region")[value_col]
         .sum()
         .reset_index()
         .rename(columns={value_col: "Opfer_insgesamt"})
     )
+    
+    # Calculate age group victims if specified
+    age_group_city_victims = None
+    if age_group_col and age_group_col in state_data.columns:
+        age_group_city_victims = (
+            state_data.groupby("Region")[age_group_col]
+            .sum()
+            .reset_index()
+            .rename(columns={age_group_col: "Opfer_altersgruppe"})
+        )
 
     gdf_merged = gdf_subset.copy()
 
@@ -419,16 +450,35 @@ def prepare_city_geo_data(d, selected_state=None, value_col="Oper insgesamt"):
                 return city
         return None
 
-    city_mapping = {}
+    # Map total victims to cities
+    city_mapping_total = {}
+    city_mapping_age = {}
+    
     for _, row in city_victims.iterrows():
         region = row["Region"]
         matching_city = find_matching_city(region)
         if matching_city:
-            city_mapping[matching_city] = row["Opfer_insgesamt"]
+            city_mapping_total[matching_city] = row["Opfer_insgesamt"]
         else:
-            city_mapping[region] = row["Opfer_insgesamt"]
+            city_mapping_total[region] = row["Opfer_insgesamt"]
+    
+    # Map age group victims to cities if available
+    if age_group_city_victims is not None:
+        for _, row in age_group_city_victims.iterrows():
+            region = row["Region"]
+            matching_city = find_matching_city(region)
+            if matching_city:
+                city_mapping_age[matching_city] = row["Opfer_altersgruppe"]
+            else:
+                city_mapping_age[region] = row["Opfer_altersgruppe"]
 
-    gdf_merged["Opfer_insgesamt"] = gdf_merged["City"].map(city_mapping).fillna(0)
+    # Assign values to GeoDataFrame
+    gdf_merged["Opfer_insgesamt"] = gdf_merged["City"].map(city_mapping_total).fillna(0)
+    
+    if city_mapping_age:
+        gdf_merged["Opfer_altersgruppe"] = gdf_merged["City"].map(city_mapping_age).fillna(0)
+    else:
+        gdf_merged["Opfer_altersgruppe"] = 0
 
     try:
         gdf_projected = gdf_merged.to_crs("EPSG:32632")
@@ -467,11 +517,12 @@ def fig_geo_map(d, selected_state=None, city_mode="bundesland", age_group="all",
 
     # ----- Select metric column (age-aware) -----
     value_col = "Oper insgesamt"
+    age_group_col = None
     age_label_for_title = "alle Altersgruppen"
     if age_group != "all" and age_group in AGE_COLS:
         candidate = AGE_COLS[age_group]
         if candidate in d.columns:
-            value_col = candidate
+            age_group_col = candidate
             age_label_for_title = age_group
 
     # ----- Choose color scale -----
@@ -489,7 +540,7 @@ def fig_geo_map(d, selected_state=None, city_mode="bundesland", age_group="all",
     # ✅ BUNDESLÄNDER VIEW ----------------------------------------------------
     # ----------------------------------------------------
     if city_mode == "bundesland" and selected_state is None:
-        gdf_states_data, geojson_data = prepare_state_geo_data(d, value_col)
+        gdf_states_data, geojson_data = prepare_state_geo_data(d, value_col, age_group_col)
         if gdf_states_data is None:
             return empty_fig("Keine Bundeslanddaten verfügbar")
 
@@ -502,8 +553,12 @@ def fig_geo_map(d, selected_state=None, city_mode="bundesland", age_group="all",
             locations=gdf_states_data.index,
             color="Opfer_insgesamt",
             hover_name="Bundesland",
-            hover_data={"Opfer_insgesamt": True},
-
+            hover_data={
+                "Opfer_insgesamt": True,
+                "Opfer_altersgruppe": True,
+                "Bundesland": False
+            },
+            custom_data=["Bundesland", "Opfer_insgesamt", "Opfer_altersgruppe"],
             opacity=0.7,
             map_style="open-street-map",
             color_continuous_scale=color_scale,
@@ -511,18 +566,38 @@ def fig_geo_map(d, selected_state=None, city_mode="bundesland", age_group="all",
             center={"lat": 51.0, "lon": 10.2},
             title=f"Opfer nach Bundesland – {age_label_for_title}",
         )
+        
+        # Update hover template to show both total and age group victims
+        if age_group != "all":
+            fig.update_traces(
+                hovertemplate=(
+                    "<b>%{customdata[0]}</b><br>" +
+                    f"Opfer gesamt: %{{customdata[1]:,.0f}}<br>" +
+                    f"Opfer {age_label_for_title}: %{{customdata[2]:,.0f}}<br>" +
+                    "<extra></extra>"
+                )
+            )
+        else:
+            fig.update_traces(
+                hovertemplate=(
+                    "<b>%{customdata[0]}</b><br>" +
+                    "Opfer gesamt: %{customdata[1]:,.0f}<br>" +
+                    "<extra></extra>"
+                )
+            )
+        
         fig.update_layout(
             margin={"l": 0, "r": 0, "t": 0, "b": 0},
             height=500,
             clickmode="event+select"
-)
+        )
 
         return fig
 
     # ----------------------------------------------------
     # ✅ CITY VIEW (all Germany OR inside Bundesland)
     # ----------------------------------------------------
-    gdf_cities_data, geojson_data, center = prepare_city_geo_data(d, selected_state, value_col)
+    gdf_cities_data, geojson_data, center = prepare_city_geo_data(d, selected_state, value_col, age_group_col)
     if gdf_cities_data is None:
         return empty_fig("Keine Städtedaten verfügbar")
 
@@ -539,7 +614,13 @@ def fig_geo_map(d, selected_state=None, city_mode="bundesland", age_group="all",
         locations=gdf_plot.index,
         color="Opfer_insgesamt",
         hover_name="City",
-        hover_data={"Opfer_insgesamt": True, "Bundesland": True},
+        hover_data={
+            "Opfer_insgesamt": True,
+            "Opfer_altersgruppe": True,
+            "Bundesland": True,
+            "City": False
+        },
+        custom_data=["City", "Bundesland", "Opfer_insgesamt", "Opfer_altersgruppe"],
         opacity=0.8,
         map_style="open-street-map",
         color_continuous_scale=color_scale,
@@ -547,13 +628,33 @@ def fig_geo_map(d, selected_state=None, city_mode="bundesland", age_group="all",
         center={"lat": center_lat, "lon": center_lon},
         title=f"Opfer – Städteansicht – {age_label_for_title}",
     )
+    
+    # Update hover template to show both total and age group victims
+    if age_group != "all":
+        fig.update_traces(
+            hovertemplate=(
+                "<b>%{customdata[0]}</b><br>" +
+                "Bundesland: %{customdata[1]}<br>" +
+                f"Opfer gesamt: %{{customdata[2]:,.0f}}<br>" +
+                f"Opfer {age_label_for_title}: %{{customdata[3]:,.0f}}<br>" +
+                "<extra></extra>"
+            )
+        )
+    else:
+        fig.update_traces(
+            hovertemplate=(
+                "<b>%{customdata[0]}</b><br>" +
+                "Bundesland: %{customdata[1]}<br>" +
+                "Opfer gesamt: %{customdata[2]:,.0f}<br>" +
+                "<extra></extra>"
+            )
+        )
+    
     fig.update_layout(
         margin={"l": 0, "r": 0, "t": 0, "b": 0},
         height=550,
         clickmode="none"
-)
-
-
+    )
 
     return fig
 
