@@ -1536,11 +1536,7 @@ def layout_temporal():
     )
 
 
-<<<<<<< HEAD
-=======
-# --------- TRENDS LAYOUT ---------
 
->>>>>>> af62773 (elon mosk deomi check)
 def layout_trends():
     return html.Div(
         children=[
