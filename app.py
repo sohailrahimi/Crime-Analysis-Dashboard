@@ -768,11 +768,8 @@ def prepare_city_geo_data(d, selected_state=None, value_col="Oper insgesamt", ag
 
 # ----- COLOR SCALES FOR SAFETY MODE -----
 COLOR_SCALE_UNSAFE = "Reds"
-COLOR_SCALE_SAFE = [
-    [0.0, "#2ecc71"],   # green (safest)
-    [0.5, "#f39c12"],   # orange (medium)
-    [1.0, "#e74c3c"],   # red (least safe)
-]
+# Safe mode: green-only scale, REVERSED so that LOWER crime = DARKER green
+COLOR_SCALE_SAFE = "Greens_r"
 COLOR_SCALE_ALL = "OrRd"
 
 
@@ -1651,14 +1648,13 @@ def layout_trends():
                             dcc.Dropdown(
                                 id="trend-age-group",
                                 options=(
-                                    [{"label": "Kinder <14", "value": "Kinder <14"}]
+                                    [{"label": "Alle Altersgruppen", "value": "all"}]
                                     + [
                                         {"label": label, "value": label}
                                         for label in AGE_COLS.keys()
-                                        if label != "Kinder <14"
                                     ]
                                 ),
-                                value="Kinder <14",
+                                value="all",  # Standard: alle Altersgruppen
                                 clearable=False,
                             ),
                         ],
@@ -1860,14 +1856,7 @@ def fig_children_ranking(d, top_n=10, mode="dangerous", age_group="Kinder <14"):
     gdf_plot = gdf_plot.reset_index().rename(columns={"index": "id"})
     geojson_data = json.loads(gdf_plot.to_json())
 
-    # Farbskala nach Modus
-    # Semantic danger scale: green → yellow → orange → red
-    danger_scale = [
-        [0.0, "#2ecc71"],  # green (lowest danger)
-        [0.33, "#f1c40f"],  # yellow
-        [0.66, "#f39c12"],  # orange
-        [1.0, "#e74c3c"],  # red (highest danger)
-    ]
+    # Farbskala nach Modus (update: danger mode uses only Reds scale)
 
     # Context-dependent title
     if mode == "safe":
@@ -1875,7 +1864,7 @@ def fig_children_ranking(d, top_n=10, mode="dangerous", age_group="Kinder <14"):
     else:
         title_mode = "gefährlichsten (meiste Opfer)"
 
-    # 🔵 Neue Map im Stil des Dash-Beispiels: px.choropleth_map
+    # Neue Map: px.choropleth_map mit angepasster Farbskala
     fig = px.choropleth_map(
         gdf_plot,
         geojson=geojson_data,
@@ -1889,7 +1878,9 @@ def fig_children_ranking(d, top_n=10, mode="dangerous", age_group="Kinder <14"):
             "Anteil_Kinder": ":.1f",
             "Bundesland": True,
         },
-        color_continuous_scale=danger_scale,
+        color_continuous_scale=(
+            "Reds" if mode == "dangerous" else COLOR_SCALE_SAFE
+        ),
         labels={"Kinder_0_14": f"Opfer ({age_group})"},
         title=f"Top {top_n} {title_mode} Städte – Opfer ({age_group})",
         center={"lat": 51.0, "lon": 10.2},
@@ -1909,21 +1900,22 @@ def fig_children_ranking(d, top_n=10, mode="dangerous", age_group="Kinder <14"):
 # --------- Helper: Bar chart for children 0–14 Top-N ---------
 def fig_children_bar(d, top_n=10, mode="dangerous", age_group="Kinder <14"):
     """
-    Bar chart for the same Top-N selection as fig_children_ranking:
-    - mode='dangerous' -> highest Kinder_0_14
-    - mode='safe'      -> lowest non-zero Kinder_0_14
+    Lollipop chart for children victims (cleaner than bars for many cities)
+    - mode='dangerous' -> highest values (red)
+    - mode='safe'      -> lowest values (green)
     """
-    # Default behavior: keep bar chart empty until user selects a specific Top-N
-    # (the dropdown default is -1 = "Alle Städte")
+
+    # Keep chart empty until user selects Top‑N
     if top_n in (None, -1):
-        return empty_fig("Bitte eine Top-N Auswahl treffen, um das Balkendiagramm zu sehen.")
+        return empty_fig("Bitte eine Top‑N Auswahl treffen.")
+
     if d.empty:
         return empty_fig("Keine Daten verfügbar")
 
-    # Selected age group column (falls back to Kinder <14)
     if age_group not in AGE_COLS:
         age_group = "Kinder <14"
     col_children = AGE_COLS[age_group]
+
     if col_children not in d.columns:
         return empty_fig(f"Keine Daten für {age_group} verfügbar.")
 
@@ -1931,50 +1923,72 @@ def fig_children_bar(d, top_n=10, mode="dangerous", age_group="Kinder <14"):
         d.groupby(["Region", "Bundesland"])[col_children]
         .sum()
         .reset_index()
-        .rename(columns={col_children: "Kinder_0_14"})
+        .rename(columns={col_children: "Kinder"})
     )
 
-    # Keep only cities with data (avoid irrelevant zeros for safe mode)
-    g = g[g["Kinder_0_14"] > 0].copy()
-    if g.empty:
-        return empty_fig("Zu wenige Daten für Kinder (0–14).")
+    # Remove zero values (important for safe mode)
+    g = g[g["Kinder"] > 0]
 
     ascending = True if mode == "safe" else False
-    g = g.sort_values("Kinder_0_14", ascending=ascending)
+    g = g.sort_values("Kinder", ascending=ascending).head(top_n)
 
-    bar_n = top_n or 10
+    if g.empty:
+        return empty_fig("Keine Daten für diese Auswahl.")
 
-    if bar_n is not None and bar_n > 0:
-        g = g.head(bar_n)
+    # Normalize for color intensity
+    min_v, max_v = g["Kinder"].min(), g["Kinder"].max()
+    norm = (g["Kinder"] - min_v) / (max_v - min_v + 1e-9)
 
-    # Title
-    if mode == "safe":
-        title_mode = "Sicherste Städte (wenigste Opfer)"
-    else:
-        title_mode = "Gefährlichste Städte (meiste Opfer)"
+    fig = go.Figure()
 
-    title = f"{title_mode} – Opfer ({age_group}) – Top {bar_n}"
-
-    # Use same color logic as the map
-    if mode == "safe":
-        bar_color_scale = COLOR_SCALE_SAFE
-    else:
-        bar_color_scale = COLOR_SCALE_UNSAFE
-
-    fig = px.bar(
-        g,
-        x="Kinder_0_14",
-        y="Region",
-        orientation="h",
-        color="Kinder_0_14",
-        color_continuous_scale=bar_color_scale,
-        hover_data={"Bundesland": True, "Kinder_0_14": True},
-        labels={"Kinder_0_14": f"Opfer ({age_group})",
-                "Region": "Stadt / Region"},
-        title=title,
+    # --- Lollipop stems ---
+    fig.add_trace(
+        go.Scatter(
+            x=g["Kinder"],
+            y=g["Region"],
+            mode="lines",
+            line=dict(color="#cbd5e1", width=2),
+            hoverinfo="skip",
+            showlegend=False,
+        )
     )
+
+    # --- Lollipop heads ---
+    fig.add_trace(
+        go.Scatter(
+            x=g["Kinder"],
+            y=g["Region"],
+            mode="markers",
+            marker=dict(
+                size=12,
+                color=norm,
+                colorscale=("Reds" if mode == "dangerous" else COLOR_SCALE_SAFE),
+                showscale=False,
+                line=dict(color="#111827", width=0.5),
+            ),
+            hovertemplate=(
+                "<b>%{y}</b><br>"
+                "Opfer (" + age_group + "): %{x}<extra></extra>"
+            ),
+            showlegend=False,
+        )
+    )
+
+    fig.update_layout(
+        title=(
+            f"Gefährlichste Städte – Opfer ({age_group}) – Top {top_n}"
+            if mode == "dangerous"
+            else f"Sicherste Städte – Opfer ({age_group}) – Top {top_n}"
+        ),
+        height=STANDARD_HEIGHT,
+        margin=dict(l=140, r=30, t=60, b=40),
+        xaxis_title=f"Opfer ({age_group})",
+        yaxis_title="Stadt / Region",
+    )
+
     fig.update_yaxes(autorange="reversed")
-    fig.update_layout(coloraxis_showscale=False, height=STANDARD_HEIGHT)
+    fig.update_xaxes(showgrid=True, gridcolor="#e5e7eb")
+
     return fig
 
 # viollence agains Women over time
