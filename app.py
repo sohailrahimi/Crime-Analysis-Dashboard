@@ -173,7 +173,8 @@ CRIME_SHORT = sorted(df["Straftat_kurz"].unique())
 STATES = sorted(df["Bundesland"].dropna().unique())
 
 
-# Show the longest crime names that are still used
+#Jobless Data 
+
 
 # --------- LOAD GEO DATA ---------
 print("Lade Geodaten...")
@@ -1255,12 +1256,14 @@ def sidebar_layout(path):
                             nav_link("Deliktskategorien", "/crime"),
                             nav_link("Zeitliche Einblicke", "/temporal"),
                             nav_link("Trends", "/trends"),
+                            
                         ],
                         vertical=True,
                         pills=True,
                     ),
                 ],
             ),
+
         ],
     )
 
@@ -1533,6 +1536,11 @@ def layout_temporal():
     )
 
 
+<<<<<<< HEAD
+=======
+# --------- TRENDS LAYOUT ---------
+
+>>>>>>> af62773 (elon mosk deomi check)
 def layout_trends():
     return html.Div(
         children=[
@@ -1695,6 +1703,19 @@ def layout_trends():
 
             html.H3("3. Steigt die Gewalt gegen Frauen an?"),
             dcc.Graph(id="trend-women-violence", style={"height": "500px"}),
+
+            html.Hr(style={"margin": "32px 0"}),
+
+            html.H3("4. Welche Deliktsgruppen wachsen am schnellsten?"),
+            html.P(
+            "Vergleich der Opferzahlen 2019 vs. 2024 – welche Deliktsarten zeigen den stärksten Anstieg?",
+            className="text-muted",
+            ),
+
+            dcc.Graph(
+                id="trend-fastest-crimes",
+                style={"height": "500px", "width": "100%"}
+            ),
         ]
     )
 
@@ -2005,6 +2026,52 @@ def fig_violence_women(d):
 
     return fig
 
+# which crime types are growing fastest
+def fig_fastest_growing_crimes(d):
+    if d.empty:
+        return empty_fig("Keine Daten verfügbar")
+
+    d2 = d[d["Straftat_kurz"] != "Straftaten insgesamt"].copy()
+
+    years = sorted(d2["Jahr"].unique())
+    if len(years) < 2:
+        return empty_fig("Mindestens zwei Jahre notwendig (2019 & 2024).")
+
+    start, end = years[0], years[-1]
+
+    # Sum victims by crime type for first and last year
+    g = (
+        d2.groupby(["Straftat_kurz", "Jahr"])["Oper insgesamt"]
+        .sum()
+        .reset_index()
+    )
+
+    start_vals = g[g["Jahr"] == start].set_index("Straftat_kurz")["Oper insgesamt"]
+    end_vals = g[g["Jahr"] == end].set_index("Straftat_kurz")["Oper insgesamt"]
+
+    df_growth = (end_vals - start_vals).dropna().reset_index()
+    df_growth.columns = ["Straftat_kurz", "Wachstum"]
+
+    df_growth = df_growth.sort_values("Wachstum", ascending=False)
+
+    fig = px.bar(
+        df_growth,
+        x="Wachstum",
+        y="Straftat_kurz",
+        orientation="h",
+        color="Wachstum",
+        color_continuous_scale="YlOrRd",
+        labels={"Wachstum": f"Zunahme der Opfer {start}–{end}"},
+        title=f"Am schnellsten wachsende Deliktsgruppen ({start}–{end})",
+    )
+
+    fig.update_yaxes(autorange="reversed")
+    fig.update_layout(coloraxis_showscale=False)
+
+    return fig
+
+
+
 
 # --------- ROOT LAYOUT (HEADER + SIDEBAR + CONTENT) ---------
 app.layout = html.Div(
@@ -2086,6 +2153,8 @@ def render_page(path):
         return layout_geo()
     if path == "/crime":
         return layout_crime()
+    if path == "/correlations":
+        return layout_correlations()
     if path == "/trends":                     # 🆕 NEW
         return layout_trends()
     if path == "/temporal":
@@ -2334,7 +2403,16 @@ def update_trend_children_cities(years, crimes, states, top_n, mode, age_group):
 def update_trend_violence_women(years, crimes, states):
     d = filter_data(years or YEARS, crimes or [], states or [])
     return fig_violence_women(d)
-
+#fastest growing crimes callback
+@app.callback(
+    Output("trend-fastest-crimes", "figure"),
+    Input("filter-year", "value"),
+    Input("filter-crime", "value"),
+    Input("filter-state", "value"),
+)
+def update_fastest_growing_crimes(years, crimes, states):
+    d = filter_data(years or YEARS, crimes or [], states or [])
+    return fig_fastest_growing_crimes(d)
 
 # --------- TEMPORAL CALLBACK ---------
 @app.callback(
