@@ -2,6 +2,7 @@ import json
 import re
 from urllib.request import urlopen
 
+
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -295,21 +296,57 @@ def build_kpis(d):
 
 # --------- OVERVIEW FIGURES ---------
 def fig_trend(d):
+    """
+    Single-line trend chart styled like
+    'Steigt die Gewalt gegen Frauen an?' (clean, official look)
+    """
     if d.empty:
         return empty_fig()
 
     d2 = d[d["Straftat_kurz"] != "Straftaten insgesamt"]
     g = d2.groupby("Jahr")["Oper insgesamt"].sum().reset_index()
 
-    fig = px.line(
-        g,
-        x="Jahr",
-        y="Oper insgesamt",
-        markers=True,
-        color_discrete_sequence=["#1f77b4"],
-        title="Zeitliche Entwicklung der Opferzahlen",
-        labels={"Oper insgesamt": "Opferzahl"},
+    fig = go.Figure()
+
+    fig.add_trace(
+        go.Scatter(
+            x=g["Jahr"],
+            y=g["Oper insgesamt"],
+            mode="lines+markers",
+            name="Gesamt Opferzahl",
+            line=dict(
+                color="#b91c1c",  # strong red like reference
+                width=4,
+            ),
+            marker=dict(
+                size=12,
+                symbol="square",  # square point style
+                color="#b91c1c",
+                line=dict(color="#7f1d1d", width=1),
+            ),
+            hovertemplate="<b>%{x}</b><br>%{y:,} Opfer<extra></extra>",
+        )
     )
+
+    fig.update_layout(
+        title="Zeitliche Entwicklung der Opferzahlen",
+        xaxis_title="",
+        yaxis_title="erfasste Fälle",
+        height=STANDARD_HEIGHT,
+        plot_bgcolor="white",
+        margin=dict(l=70, r=30, t=70, b=90),
+        showlegend=False,
+    )
+
+    fig.update_xaxes(
+        showgrid=True,
+        gridcolor="#d1d5db",
+        tickmode="linear",
+        dtick=1,
+        tickangle=-90,
+    )
+    fig.update_yaxes(showgrid=True, gridcolor="#d1d5db")
+
     return fig
 
 
@@ -423,6 +460,12 @@ def fig_crime_pie(d):
 
     # Add "Andere" slice to the main chart
     other_sum = rest["Oper insgesamt"].sum()
+    # --- Insert: Compute sub pie percentages relative to overall total ---
+    total_sum = g["Oper insgesamt"].sum()
+    # Percentages in the sub pie should be relative to the overall total (same basis as "Andere")
+    rest = rest.copy()
+    rest["pct_total"] = np.where(total_sum > 0, 100 * rest["Oper insgesamt"] / total_sum, 0.0)
+    rest["pct_label"] = rest["pct_total"].map(lambda p: f"{p:.2f}%".replace(".", ","))
     main_df = pd.concat(
         [
             top,
@@ -478,10 +521,16 @@ def fig_crime_pie(d):
             labels=rest["Straftat_kurz"],
             values=rest["Oper insgesamt"],
             hole=0.0,
-            textinfo="percent+label",
+            text=rest["pct_label"],
+            textinfo="label+text",
             marker=dict(colors=sub_colors),
             sort=False,
-            hovertemplate="<b>%{label}</b><br>Opfer: %{value:,}<br>%{percent}<extra></extra>",
+            hovertemplate=(
+                "<b>%{label}</b><br>"
+                "Opfer: %{value:,}<br>"
+                "Anteil gesamt: %{customdata:.2f}%<extra></extra>"
+            ),
+            customdata=rest["pct_total"],
         ),
         row=1,
         col=2,
@@ -1102,25 +1151,135 @@ def fig_stacked(d):
     return fig
 
 
+AGE_POPULATION_SHARE = {
+    "Kinder <14": 0.129,
+    "Jugendliche 14–<18": 0.045,
+    "Heranwachsende 18–<21": 0.037,
+    "Erwachsene 21–<60": 0.569,
+    "Senior:innen 60+": 0.22,
+}
+
 def fig_age(d, crime):
     if d.empty:
         return empty_fig()
+
     d_sel = d[d["Straftat_kurz"] == crime]
     if d_sel.empty:
         return empty_fig("Keine Daten für diese Deliktsgruppe")
-    vals = {lbl: d_sel[col].sum()
-            for lbl, col in AGE_COLS.items() if col in d_sel}
-    if not vals:
+
+    # --- Aggregate victims by age group ---
+    values = {
+        label: d_sel[col].sum()
+        for label, col in AGE_COLS.items()
+        if col in d_sel.columns
+    }
+
+    if not values:
         return empty_fig("Keine Altersdaten verfügbar")
-    fig = px.bar(
-        x=list(vals.keys()),
-        y=list(vals.values()),
-        color=list(vals.values()),
-        color_continuous_scale="Viridis",
-        labels={"x": "Altersgruppe", "y": "Opferzahl"},
-        title=f"Altersstruktur der Opfer – {crime}",
+
+    df_age = pd.DataFrame(
+        {"Altersgruppe": list(values.keys()), "Opfer": list(values.values())}
     )
-    fig.update_layout(coloraxis_showscale=False)
+
+    total_victims = df_age["Opfer"].sum()
+    if total_victims <= 0:
+        return empty_fig("Keine gültigen Opferzahlen")
+
+    # --- Victim share ---
+    df_age["Victim_share"] = df_age["Opfer"] / total_victims
+
+    # --- Population share (must be defined globally) ---
+    df_age["Population_share"] = df_age["Altersgruppe"].map(AGE_POPULATION_SHARE)
+    df_age = df_age.dropna(subset=["Population_share"])
+
+    if df_age.empty:
+        return empty_fig("Keine Populationsanteile für Altersgruppen gefunden")
+
+    # --- Risk index & deviation ---
+    df_age["Risk_index"] = 100 * (
+        df_age["Victim_share"] / df_age["Population_share"]
+    )
+    df_age["Deviation"] = df_age["Risk_index"] - 100
+
+    # --- Sort for clarity ---
+    df_age = df_age.sort_values("Deviation")
+
+    # --- Colors: green = under-represented, red = over-represented ---
+    df_age["Color"] = np.where(df_age["Deviation"] >= 0, "#dc2626", "#16a34a")
+
+    fig = go.Figure()
+
+    # Reference line at expected value
+    fig.add_vline(
+        x=0,
+        line_dash="dash",
+        line_color="#64748b",
+        annotation_text="Erwartet (0)",
+        annotation_position="top",
+    )
+
+    # Lollipop stems
+    for _, row in df_age.iterrows():
+        fig.add_trace(
+            go.Scatter(
+                x=[0, row["Deviation"]],
+                y=[row["Altersgruppe"], row["Altersgruppe"]],
+                mode="lines",
+                line=dict(color="#e5e7eb", width=4),
+                hoverinfo="skip",
+                showlegend=False,
+            )
+        )
+
+    # Lollipop dots
+    fig.add_trace(
+        go.Scatter(
+            x=df_age["Deviation"],
+            y=df_age["Altersgruppe"],
+            mode="markers+text",
+            marker=dict(
+                size=18,
+                color=df_age["Color"],
+                line=dict(color="white", width=1.5),
+            ),
+            text=[f"{v:+.0f}" for v in df_age["Deviation"]],
+            textposition="middle right",
+            hovertemplate=(
+                "<b>%{y}</b><br>"
+                "Abweichung vom Erwartungswert: %{x:+.1f}<br>"
+                "<extra></extra>"
+            ),
+            showlegend=False,
+        )
+    )
+
+    # Symmetric axis range
+    max_abs = float(np.nanmax(np.abs(df_age["Deviation"])) if len(df_age) else 0)
+    pad = max(10.0, max_abs * 0.25)
+    x_lim = max_abs + pad
+
+    fig.update_layout(
+        title={
+            "text": f"Über- und Unterrepräsentation nach Altersgruppe – {crime}",
+            "x": 0.02,
+            "xanchor": "left",
+        },
+        xaxis=dict(
+            title="Abweichung vom erwarteten Opferanteil (Index 100 → 0)",
+            showgrid=True,
+            gridcolor="#f1f5f9",
+            zeroline=False,
+            range=[-x_lim, x_lim],
+        ),
+        yaxis=dict(showgrid=False),
+        height=STANDARD_HEIGHT,
+        margin=dict(l=160, r=60, t=70, b=40),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        transition_duration=600,
+        transition_easing="cubic-in-out",
+    )
+
     return fig
 
 
@@ -1128,20 +1287,80 @@ def fig_age(d, crime):
 def fig_state_trend(d):
     if d.empty:
         return empty_fig()
-    top = d.groupby("Bundesland")["Oper insgesamt"].sum().nlargest(6).index
-    d_top = d[d["Bundesland"].isin(top)]
-    g = d_top.groupby(["Jahr", "Bundesland"])[
-        "Oper insgesamt"].sum().reset_index()
-    fig = px.line(
-        g,
-        x="Jahr",
-        y="Oper insgesamt",
-        color="Bundesland",
-        markers=True,
-        color_discrete_sequence=px.colors.qualitative.Set1,
-        title="Ländervergleich im Zeitverlauf",
-        labels={"Oper insgesamt": "Opferzahl"},
+
+    # Top 6 Bundesländer by total victims (same logic as before)
+    top_states = (
+        d.groupby("Bundesland")["Oper insgesamt"]
+        .sum()
+        .nlargest(6)
+        .index
     )
+
+    d_top = d[d["Bundesland"].isin(top_states)]
+
+    g = (
+        d_top.groupby(["Jahr", "Bundesland"])["Oper insgesamt"]
+        .sum()
+        .reset_index()
+    )
+
+    fig = go.Figure()
+
+    # Use a restrained qualitative palette
+    colors = px.colors.qualitative.Dark24
+
+    for i, state in enumerate(sorted(top_states)):
+        df_s = g[g["Bundesland"] == state]
+
+        fig.add_trace(
+            go.Scatter(
+                x=df_s["Jahr"],
+                y=df_s["Oper insgesamt"],
+                mode="lines+markers",
+                name=state,
+                line=dict(
+                    width=3,
+                    color=colors[i % len(colors)],
+                ),
+                marker=dict(
+                    size=9,
+                    symbol="square",   # same marker style as reference
+                    color=colors[i % len(colors)],
+                    line=dict(color="#111827", width=0.6),
+                ),
+                hovertemplate="<b>%{x}</b><br>%{y:,} Opfer<extra></extra>",
+            )
+        )
+
+    fig.update_layout(
+        title="Ländervergleich im Zeitverlauf",
+        xaxis_title="",
+        yaxis_title="erfasste Fälle",
+        height=STANDARD_HEIGHT,
+        plot_bgcolor="white",
+        margin=dict(l=70, r=30, t=70, b=110),
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.28,
+            xanchor="left",
+            x=0,
+        ),
+    )
+
+    fig.update_xaxes(
+        showgrid=True,
+        gridcolor="#d1d5db",
+        tickmode="linear",
+        dtick=1,
+        tickangle=-90,
+    )
+
+    fig.update_yaxes(
+        showgrid=True,
+        gridcolor="#d1d5db",
+    )
+
     return fig
 
 
@@ -1213,6 +1432,26 @@ def sidebar_layout(path):
     return html.Div(
         style=SIDEBAR_STYLE,
         children=[
+            # --- Navigation FIRST ---
+            dbc.Card(
+                body=True,
+                style={"marginBottom": "12px"},
+                children=[
+                    html.H5("Navigation", className="card-title"),
+                    dbc.Nav(
+                        [
+                            nav_link("Übersicht", "/overview"),
+                            nav_link("Geografisch", "/geo"),
+                            nav_link("Deliktskategorien", "/crime"),
+                            nav_link("Zeitliche Einblicke", "/temporal"),
+                            nav_link("Trends", "/trends"),
+                        ],
+                        vertical=True,
+                        pills=True,
+                    ),
+                ],
+            ),
+            # --- Analysefilter BELOW ---
             dbc.Card(
                 body=True,
                 children=[
@@ -1227,8 +1466,7 @@ def sidebar_layout(path):
                     html.Label("Deliktsgruppen", className="mt-3"),
                     dcc.Dropdown(
                         id="filter-crime",
-                        options=[{"label": c, "value": c}
-                                 for c in CRIME_SHORT],
+                        options=[{"label": c, "value": c} for c in CRIME_SHORT],
                         multi=True,
                         value=[],
                     ),
@@ -1241,26 +1479,6 @@ def sidebar_layout(path):
                     ),
                 ],
             ),
-            dbc.Card(
-                body=True,
-                style={"marginBottom": "12px"},
-                children=[
-                    html.H5("Navigation", className="card-title"),
-                    dbc.Nav(
-                        [
-                            nav_link("Übersicht", "/overview"),
-                            nav_link("Geografisch", "/geo"),
-                            nav_link("Deliktskategorien", "/crime"),
-                            nav_link("Zeitliche Einblicke", "/temporal"),
-                            nav_link("Trends", "/trends"),
-                            
-                        ],
-                        vertical=True,
-                        pills=True,
-                    ),
-                ],
-            ),
-
         ],
     )
 
@@ -1329,10 +1547,6 @@ def layout_overview():
             html.Br(),
             dcc.Graph(id="trend"),
             html.Br(),
-            dcc.Graph(id="top5"),
-            html.Br(),
-            dcc.Graph(id="donut"),
-            html.Br(),
             dcc.Graph(id="crime-pie"),
         ]
     )
@@ -1397,49 +1611,9 @@ def layout_geo():
                     "backgroundColor": "#eef2ff",
                     "borderRadius": "8px",
                     "border": "1px solid #c7d2fe",
+                    "maxWidth": "300px",
                 },
                 children=[
-                    # 1) City-Modus / Top N
-                    html.Div(
-                        style={"flex": "1"},
-                        children=[
-                            html.Label("Auswahl"),
-                            dcc.Dropdown(
-                                id="geo-city-mode",
-                                options=[
-                                    {"label": "Bundesländer ",
-                                        "value": "bundesland"},
-                                    {"label": "Alle Städte", "value": "all"},
-                                    {"label": "Top 10 Städte", "value": 10},
-                                    {"label": "Top 20 Städte", "value": 20},
-                                    {"label": "Top 50 Städte", "value": 50},
-                                    {"label": "Top 100 Städte", "value": 100},
-                                ],
-                                value="bundesland",  # Standard: Bundesländer-Ansicht
-                                clearable=False,
-                            ),
-                        ],
-                    ),
-                    # 2) Altersgruppe
-                    html.Div(
-                        style={"flex": "1"},
-                        children=[
-                            html.Label("Altersgruppe"),
-                            dcc.Dropdown(
-                                id="geo-age-group",
-                                options=(
-                                    [{"label": "Alle Altersgruppen", "value": "all"}]
-                                    + [
-                                        {"label": label, "value": label}
-                                        for label in AGE_COLS.keys()
-                                    ]
-                                ),
-                                value="all",  # Standard: alle Altersgruppen
-                                clearable=False,
-                            ),
-                        ],
-                    ),
-                    # 3) Safe / Unsafe
                     html.Div(
                         style={"flex": "1"},
                         children=[
@@ -1447,14 +1621,12 @@ def layout_geo():
                             dcc.Dropdown(
                                 id="geo-safety-mode",
                                 options=[
-                                    {"label": "Alle", "value": "all"},
                                     {"label": "Gefährlich", "value": "unsafe"},
                                     {"label": "Sicher", "value": "safe"},
                                 ],
-                                value="all",
+                                value="unsafe",
                                 clearable=False,
                             ),
-
                         ],
                     ),
                 ],
@@ -1995,44 +2167,87 @@ def fig_children_bar(d, top_n=10, mode="dangerous", age_group="Kinder <14"):
 
 
 def fig_violence_women(d):
+    """
+    Multi-line trend chart:
+    - One line per crime type (Straftat_kurz)
+    - Distinct line styles & markers
+    - Same clean, official-style look
+    """
     if d.empty:
         return empty_fig("Keine Daten verfügbar")
 
-    # violent crime categories
-    violence_categories = [
-        "Sexualstraftaten",
-        "Einfache KV",
-        "Schwere KV",
-        "Gewaltkriminalität",
-        "Raub & Erpressung",
-        "Raub Geschäfte",
-        "Raub auf Straßen",
-        "Raub in Wohnungen",
-    ]
-
-    d2 = d[d["Straftat_kurz"].isin(violence_categories)]
-
+    # Exclude total category
+    d2 = d[d["Straftat_kurz"] != "Straftaten insgesamt"].copy()
     if d2.empty:
-        return empty_fig("Keine Daten zur Gewalt gegen Frauen verfügbar")
+        return empty_fig("Keine Deliktsdaten verfügbar")
 
+    # Aggregate female victims per year & crime type
     g = (
-        d2.groupby("Jahr")["Opfer weiblich"]
+        d2.groupby(["Jahr", "Straftat_kurz"])["Opfer weiblich"]
         .sum()
         .reset_index()
-        .sort_values("Jahr")
     )
 
-    fig = px.line(
-        g,
-        x="Jahr",
-        y="Opfer weiblich",
-        markers=True,
-        color_discrete_sequence=["#b91c1c"],  # dark red
-        title="Gewalt gegen Frauen im Zeitverlauf (2019–2024)",
-        labels={"Opfer weiblich": "Weibliche Opfer"},
+    crime_types = g["Straftat_kurz"].unique().tolist()
+
+    # Predefined styles (cycled if more crime types exist)
+    colors = px.colors.qualitative.Dark24
+    markers = [
+        "circle", "square", "diamond", "triangle-up",
+        "triangle-down", "cross", "x", "star",
+        "hexagon", "pentagon",
+    ]
+    line_dashes = ["solid", "dash", "dot", "dashdot"]
+
+    fig = go.Figure()
+
+    for i, crime in enumerate(crime_types):
+        df_c = g[g["Straftat_kurz"] == crime]
+
+        fig.add_trace(
+            go.Scatter(
+                x=df_c["Jahr"],
+                y=df_c["Opfer weiblich"],
+                mode="lines+markers",
+                name=crime,
+                line=dict(
+                    color=colors[i % len(colors)],
+                    width=3,
+                    dash=line_dashes[i % len(line_dashes)],
+                ),
+                marker=dict(
+                    symbol=markers[i % len(markers)],
+                    size=9,
+                    color=colors[i % len(colors)],
+                ),
+                hovertemplate="<b>%{x}</b><br>%{y:,} Fälle<extra></extra>",
+            )
+        )
+
+    fig.update_layout(
+        title="Steigt die Gewalt gegen Frauen an? – Entwicklung nach Deliktsart",
+        xaxis_title="",
+        yaxis_title="erfasste Fälle (weibliche Opfer)",
+        height=STANDARD_HEIGHT,
+        plot_bgcolor="white",
+        margin=dict(l=60, r=30, t=70, b=120),
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.28,
+            xanchor="left",
+            x=0,
+        ),
     )
 
-    fig.update_layout(height=STANDARD_HEIGHT)
+    fig.update_xaxes(
+        showgrid=True,
+        gridcolor="#d1d5db",
+        tickmode="linear",
+        dtick=1,
+        tickangle=-90,
+    )
+    fig.update_yaxes(showgrid=True, gridcolor="#d1d5db")
 
     return fig
 
@@ -2131,7 +2346,7 @@ app.layout = html.Div(
                     style={
                         "position": "absolute",
                         "top": "30px",
-                        "right": "30px",
+                        "left": "30px",
                         "fontSize": "22px",
                         "background": "transparent",
                         "border": "none",
@@ -2218,8 +2433,6 @@ def update_sidebar_visibility(visible):
     Output("kpi-under18-adults", "children"),
     Output("kpi-crime-types", "children"),
     Output("trend", "figure"),
-    Output("top5", "figure"),
-    Output("donut", "figure"),
     Output("crime-pie", "figure"),
     Input("filter-year", "value"),
     Input("filter-state", "value"),
@@ -2240,8 +2453,6 @@ def update_overview(years, states):
         under18_adults,
         crime_types,
         fig_trend(d),
-        fig_top5(d),
-        fig_donut(d),
         fig_crime_pie(d),
     )
 
@@ -2298,20 +2509,18 @@ def update_selected_state(click_data, back_clicks, filter_states, current_state)
     Input("filter-crime", "value"),
     Input("filter-state", "value"),
     Input("selected-state-store", "data"),
-    Input("geo-city-mode", "value"),
-    Input("geo-age-group", "value"),
     Input("geo-safety-mode", "value"),
 )
 def update_geo_components(
-    years, crimes, states, selected_state, city_mode, age_group, safety_mode
+    years, crimes, states, selected_state, safety_mode
 ):
     d = filter_data(years or YEARS, crimes or [], states or [])
 
     map_fig = fig_geo_map(
         d,
         selected_state=selected_state,
-        city_mode=city_mode,
-        age_group=age_group,
+        city_mode="bundesland",
+        age_group="all",
         safety_mode=safety_mode,
     )
 
@@ -2325,8 +2534,6 @@ def update_geo_components(
     else:
         text = (
             "Aktuelle Ansicht: Deutschland – Bundesländer"
-            if city_mode == "bundesland"
-            else "Aktuelle Ansicht: Deutschland – Städte"
         )
         back_style = {"display": "none"}
 
