@@ -140,10 +140,9 @@ def load_data():
         dfs.append(df)
 
     df_all = pd.concat(dfs, ignore_index=True)
-    df_all["Bundesland_Code"] = (
-        df_all["Gemeindeschluessel"] // 1000).astype(int)
+    df_all["Bundesland_Code"] = (df_all["Gemeindeschluessel"] // 1000).astype(int)
     df_all["Bundesland"] = df_all["Bundesland_Code"].map(STATE_MAP)
-
+    
     # Create a proper Region column (Stadt/Landkreis)
     if "Stadt/Landkreis" in df_all.columns:
         df_all["Region"] = df_all["Stadt/Landkreis"]
@@ -154,14 +153,14 @@ def load_data():
     df_insg = df_all[df_all["Fallstatus"] == "insg."].copy()
 
     def short(s: str) -> str:
-        s = s.strip()
+            s = s.strip()
 
-        for long_name, short_name in CRIME_SYNONYMS.items():
-            if long_name in s:
-                return short_name
+            for long_name, short_name in CRIME_SYNONYMS.items():
+                if long_name in s:
+                    return short_name
 
     # fallback: clean & shorten safely if unknown
-        return s.replace("  ", " ").strip()
+            return s.replace("  ", " ").strip()
 
     df_insg["Straftat_kurz"] = df_insg["Straftat"].apply(short)
     return df_insg
@@ -183,24 +182,21 @@ try:
     gdf_states = gdf_states.explode(index_parts=True).reset_index(drop=True)
     gdf_states = gdf_states.to_crs("EPSG:4326")
     gdf_states["Bundesland"] = gdf_states["NAME_1"]
-
+    
     # Load city boundaries (level 2) - still needed for city view
     gdf_cities = gpd.read_file("data/gadm41_DEU_2.shp")
     gdf_cities = gdf_cities.explode(index_parts=True).reset_index(drop=True)
     gdf_cities = gdf_cities.to_crs("EPSG:4326")
     gdf_cities["Bundesland"] = gdf_cities["NAME_1"]
     gdf_cities["City"] = gdf_cities["NAME_2"]
-
-    print(
-        f"Geladen: {len(gdf_states)} Bundesländer, {len(gdf_cities)} Städte/Landkreise")
+    
+    print(f"Geladen: {len(gdf_states)} Bundesländer, {len(gdf_cities)} Städte/Landkreise")
 except Exception as e:
     print(f"Fehler beim Laden der Geodaten: {e}")
     gdf_states = None
     gdf_cities = None
 
 # --------- HELPERS ---------
-
-
 def filter_data(years, crimes, states):
     d = df
     if years:
@@ -214,8 +210,7 @@ def filter_data(years, crimes, states):
 
 def empty_fig(msg="Keine Daten verfügbar"):
     fig = go.Figure()
-    fig.add_annotation(text=msg, x=0.5, y=0.5,
-                       showarrow=False, font=dict(size=14))
+    fig.add_annotation(text=msg, x=0.5, y=0.5, showarrow=False, font=dict(size=14))
     fig.update_xaxes(visible=False)
     fig.update_yaxes(visible=False)
     return fig
@@ -246,8 +241,7 @@ def build_kpis(d):
 
     # 2) Ø Opfer pro Jahr
     n_years = d["Jahr"].nunique()
-    victims_per_year = int(round(total_victims / n_years)
-                           ) if n_years > 0 else 0
+    victims_per_year = int(round(total_victims / n_years)) if n_years > 0 else 0
 
     # 3) männlich vs. weiblich (%)
     male = d["Opfer maennlich"].sum() if "Opfer maennlich" in d.columns else 0
@@ -331,8 +325,7 @@ def fig_top5(d):
         color="Oper insgesamt",
         color_continuous_scale="YlOrRd",
         title="Top 5 Deliktsgruppen nach Opferzahl",
-        labels={"Oper insgesamt": "Opferzahl",
-                "Straftat_kurz": "Deliktsgruppe"},
+        labels={"Oper insgesamt": "Opferzahl", "Straftat_kurz": "Deliktsgruppe"},
     )
     fig.update_layout(coloraxis_showscale=False)
     return fig
@@ -361,19 +354,17 @@ def fig_donut(d):
     fig.update_layout(margin=dict(t=50, l=0, r=0, b=0))
     return fig
 
-
 # --------- PIE CHART FOR OVERVIEW ---------
 PKS_PIE_COLORS = [
-    "#1e40af",  # blue
-    "#f59e42",  # orange
-    "#84cc16",  # lime green
-    "#f43f5e",  # rose
-    "#a21caf",  # purple
-    "#0ea5e9",  # sky blue
-    "#facc15",  # yellow
-    "#64748b",  # slate
+    "#1e40af", # blue
+    "#f59e42", # orange
+    "#84cc16", # lime green
+    "#f43f5e", # rose
+    "#a21caf", # purple
+    "#0ea5e9", # sky blue
+    "#facc15", # yellow
+    "#64748b", # slate
 ]
-
 
 def fig_crime_pie(d):
     """
@@ -416,8 +407,7 @@ def fig_crime_pie(d):
             textinfo="percent+label",
             hovertemplate="<b>%{label}</b><br>Opfer: %{value:,}<br>%{percent}<extra></extra>",
         )
-        fig.update_layout(height=STANDARD_HEIGHT,
-                          legend_title_text="Deliktsgruppe")
+        fig.update_layout(height=STANDARD_HEIGHT, legend_title_text="Deliktsgruppe")
         return fig
 
     # Add "Andere" slice to the main chart
@@ -425,8 +415,7 @@ def fig_crime_pie(d):
     main_df = pd.concat(
         [
             top,
-            pd.DataFrame(
-                {"Straftat_kurz": ["Andere"], "Oper insgesamt": [other_sum]}),
+            pd.DataFrame({"Straftat_kurz": ["Andere"], "Oper insgesamt": [other_sum]}),
         ],
         ignore_index=True,
     )
@@ -446,14 +435,12 @@ def fig_crime_pie(d):
 
     # --- Colors ---
     # Main pie: use the PKS colors for the top 10; a neutral grey for "Andere"
-    main_colors = (PKS_PIE_COLORS +
-                   px.colors.qualitative.Dark24)[: len(main_df)]
+    main_colors = (PKS_PIE_COLORS + px.colors.qualitative.Dark24)[: len(main_df)]
     if len(main_colors) >= 1:
         main_colors[-1] = "#cbd5e1"  # grey for "Andere"
 
     # Sub pie: use a bigger qualitative palette
-    sub_colors = (px.colors.qualitative.Set3 +
-                  px.colors.qualitative.Dark24 + px.colors.qualitative.Alphabet)
+    sub_colors = (px.colors.qualitative.Set3 + px.colors.qualitative.Dark24 + px.colors.qualitative.Alphabet)
     sub_colors = sub_colors[: len(rest)]
 
     # --- Main pie (left) ---
@@ -579,7 +566,7 @@ def prepare_state_geo_data(d, value_col="Oper insgesamt", age_group_col=None):
         .reset_index()
         .rename(columns={value_col: "Opfer_insgesamt"})
     )
-
+    
     # Calculate age group victims if specified
     age_group_victims = None
     if age_group_col and age_group_col in victims_df.columns:
@@ -589,25 +576,22 @@ def prepare_state_geo_data(d, value_col="Oper insgesamt", age_group_col=None):
             .reset_index()
             .rename(columns={age_group_col: "Opfer_altersgruppe"})
         )
-
+    
     # Merge with geo data
     gdf_merged = gdf_states.merge(victims, on="Bundesland", how="left")
-
+    
     # Add age group data if available
     if age_group_victims is not None:
-        gdf_merged = gdf_merged.merge(
-            age_group_victims, on="Bundesland", how="left")
+        gdf_merged = gdf_merged.merge(age_group_victims, on="Bundesland", how="left")
     else:
         gdf_merged["Opfer_altersgruppe"] = 0
-
+    
     # Fill NaN values
     gdf_merged["Opfer_insgesamt"] = gdf_merged["Opfer_insgesamt"].fillna(0)
-    gdf_merged["Opfer_altersgruppe"] = gdf_merged["Opfer_altersgruppe"].fillna(
-        0)
+    gdf_merged["Opfer_altersgruppe"] = gdf_merged["Opfer_altersgruppe"].fillna(0)
 
     geojson_data = json.loads(gdf_merged.to_json())
     return gdf_merged, geojson_data
-
 
 def _norm_admin_name(x: str) -> str:
     """Normalize German admin/city strings so Region names match shapefile city names better."""
@@ -652,8 +636,7 @@ def prepare_city_geo_data(d, selected_state=None, value_col="Oper insgesamt", ag
 
     if selected_state:
         state_data = d[d["Bundesland"] == selected_state].copy()
-        gdf_subset = gdf_cities[gdf_cities["Bundesland"]
-                                == selected_state].copy()
+        gdf_subset = gdf_cities[gdf_cities["Bundesland"] == selected_state].copy()
     else:
         state_data = d.copy()
         gdf_subset = gdf_cities.copy()
@@ -686,8 +669,7 @@ def prepare_city_geo_data(d, selected_state=None, value_col="Oper insgesamt", ag
     else:
         city_victims["Opfer_altersgruppe"] = 0
 
-    city_victims["Opfer_altersgruppe"] = city_victims["Opfer_altersgruppe"].fillna(
-        0)
+    city_victims["Opfer_altersgruppe"] = city_victims["Opfer_altersgruppe"].fillna(0)
 
     # --- Build per-state normalized lookup for shapefile city names ---
     gdf_subset = gdf_subset.copy()
@@ -733,19 +715,16 @@ def prepare_city_geo_data(d, selected_state=None, value_col="Oper insgesamt", ag
         return None, None, None
 
     matched_city = (
-        matched.groupby(["Bundesland", "City_match"])[
-            ["Opfer_insgesamt", "Opfer_altersgruppe"]]
+        matched.groupby(["Bundesland", "City_match"])[["Opfer_insgesamt", "Opfer_altersgruppe"]]
         .sum()
         .reset_index()
         .rename(columns={"City_match": "City"})
     )
 
     # Merge into GeoDataFrame using BOTH keys (Bundesland + City)
-    gdf_merged = gdf_subset.merge(
-        matched_city, on=["Bundesland", "City"], how="left")
+    gdf_merged = gdf_subset.merge(matched_city, on=["Bundesland", "City"], how="left")
     gdf_merged["Opfer_insgesamt"] = gdf_merged["Opfer_insgesamt"].fillna(0)
-    gdf_merged["Opfer_altersgruppe"] = gdf_merged["Opfer_altersgruppe"].fillna(
-        0)
+    gdf_merged["Opfer_altersgruppe"] = gdf_merged["Opfer_altersgruppe"].fillna(0)
 
     # Calculate map center
     try:
@@ -764,7 +743,6 @@ def prepare_city_geo_data(d, selected_state=None, value_col="Oper insgesamt", ag
     geojson_data = json.loads(gdf_merged.to_json())
     return gdf_merged, geojson_data, (center_lat, center_lon)
 
-
 # ----- COLOR SCALES FOR SAFETY MODE -----
 COLOR_SCALE_UNSAFE = "Reds"
 COLOR_SCALE_SAFE = [
@@ -773,6 +751,7 @@ COLOR_SCALE_SAFE = [
     [1.0, "#e74c3c"],   # red (least safe)
 ]
 COLOR_SCALE_ALL = "OrRd"
+
 
 
 def fig_geo_map(d, selected_state=None, city_mode="bundesland", age_group="all", safety_mode="all"):
@@ -816,14 +795,12 @@ def fig_geo_map(d, selected_state=None, city_mode="bundesland", age_group="all",
     # ✅ BUNDESLÄNDER VIEW ----------------------------------------------------
     # ----------------------------------------------------
     if city_mode == "bundesland" and selected_state is None:
-        gdf_states_data, geojson_data = prepare_state_geo_data(
-            d, value_col, age_group_col)
+        gdf_states_data, geojson_data = prepare_state_geo_data(d, value_col, age_group_col)
         if gdf_states_data is None:
             return empty_fig("Keine Bundeslanddaten verfügbar")
 
         # Sort by safe/unsafe using metric_col
-        gdf_states_data = gdf_states_data.sort_values(
-            metric_col, ascending=ascending)
+        gdf_states_data = gdf_states_data.sort_values(metric_col, ascending=ascending)
 
         fig = px.choropleth_map(
             gdf_states_data,
@@ -837,8 +814,7 @@ def fig_geo_map(d, selected_state=None, city_mode="bundesland", age_group="all",
                 "Opfer_altersgruppe": True,
                 "Bundesland": False
             },
-            custom_data=["Bundesland", metric_col,
-                         "Opfer_insgesamt", "Opfer_altersgruppe"],
+            custom_data=["Bundesland", metric_col, "Opfer_insgesamt", "Opfer_altersgruppe"],
             opacity=0.7,
             map_style="carto-positron",
             color_continuous_scale=color_scale,
@@ -878,8 +854,7 @@ def fig_geo_map(d, selected_state=None, city_mode="bundesland", age_group="all",
     # ----------------------------------------------------
     # ✅ CITY VIEW (all Germany OR inside Bundesland)
     # ----------------------------------------------------
-    gdf_cities_data, geojson_data, center = prepare_city_geo_data(
-        d, selected_state, value_col, age_group_col)
+    gdf_cities_data, geojson_data, center = prepare_city_geo_data(d, selected_state, value_col, age_group_col)
     if gdf_cities_data is None:
         return empty_fig("Keine Städtedaten verfügbar")
 
@@ -892,8 +867,7 @@ def fig_geo_map(d, selected_state=None, city_mode="bundesland", age_group="all",
         gdf_rank = gdf_plot[gdf_plot[metric_col] > 0].copy()
         if gdf_rank.empty:
             return empty_fig("Keine Städtedaten verfügbar (nach Filter).")
-        gdf_plot = gdf_rank.sort_values(
-            metric_col, ascending=ascending).head(city_mode)
+        gdf_plot = gdf_rank.sort_values(metric_col, ascending=ascending).head(city_mode)
 
     fig = px.choropleth_map(
         gdf_plot,
@@ -908,8 +882,7 @@ def fig_geo_map(d, selected_state=None, city_mode="bundesland", age_group="all",
             "Bundesland": True,
             "City": False
         },
-        custom_data=["City", "Bundesland", metric_col,
-                     "Opfer_insgesamt", "Opfer_altersgruppe"],
+        custom_data=["City", "Bundesland", metric_col, "Opfer_insgesamt", "Opfer_altersgruppe"],
         opacity=0.8,
         map_style="carto-positron",
         color_continuous_scale=color_scale,
@@ -947,7 +920,6 @@ def fig_geo_map(d, selected_state=None, city_mode="bundesland", age_group="all",
     )
 
     return fig
-
 
 def fig_geo_state_bar(d):
     if d.empty:
@@ -1018,6 +990,8 @@ def fig_geo_state_bar(d):
     return fig
 
 
+
+
 def fig_geo_top(d):
     if d.empty:
         return empty_fig()
@@ -1059,8 +1033,7 @@ def fig_heatmap(d):
     if d2.empty:
         return empty_fig()
 
-    g = d2.groupby(["Straftat_kurz", "Jahr"])[
-        "Oper insgesamt"].sum().reset_index()
+    g = d2.groupby(["Straftat_kurz", "Jahr"])["Oper insgesamt"].sum().reset_index()
 
     fig = px.density_heatmap(
         g,
@@ -1069,15 +1042,14 @@ def fig_heatmap(d):
         z="Oper insgesamt",
         color_continuous_scale="Reds",
         title="Heatmap – Opferzahlen nach Deliktsgruppe und Jahr",
-        labels={"Oper insgesamt": "Opferzahl",
-                "Straftat_kurz": "Deliktsgruppe"},
+        labels={"Oper insgesamt": "Opferzahl", "Straftat_kurz": "Deliktsgruppe"},
     )
 
     fig.update_yaxes(autorange="reversed")
 
     # ✅ FORCE FULL SIZE
     fig.update_layout(
-        height=750,
+        height=750,  
     )
 
     return fig
@@ -1089,8 +1061,7 @@ def fig_stacked(d):
         return empty_fig()
     top = d2.groupby("Straftat_kurz")["Oper insgesamt"].sum().nlargest(6).index
     d_top = d2[d2["Straftat_kurz"].isin(top)]
-    g = d_top.groupby(["Jahr", "Straftat_kurz"])[
-        "Oper insgesamt"].sum().reset_index()
+    g = d_top.groupby(["Jahr", "Straftat_kurz"])["Oper insgesamt"].sum().reset_index()
     fig = px.bar(
         g,
         x="Jahr",
@@ -1098,8 +1069,7 @@ def fig_stacked(d):
         color="Straftat_kurz",
         color_discrete_sequence=px.colors.qualitative.Set2,
         title="Top-Deliktsgruppen im Zeitverlauf",
-        labels={"Oper insgesamt": "Opferzahl",
-                "Straftat_kurz": "Deliktsgruppe"},
+        labels={"Oper insgesamt": "Opferzahl", "Straftat_kurz": "Deliktsgruppe"},
     )
     return fig
 
@@ -1110,8 +1080,7 @@ def fig_age(d, crime):
     d_sel = d[d["Straftat_kurz"] == crime]
     if d_sel.empty:
         return empty_fig("Keine Daten für diese Deliktsgruppe")
-    vals = {lbl: d_sel[col].sum()
-            for lbl, col in AGE_COLS.items() if col in d_sel}
+    vals = {lbl: d_sel[col].sum() for lbl, col in AGE_COLS.items() if col in d_sel}
     if not vals:
         return empty_fig("Keine Altersdaten verfügbar")
     fig = px.bar(
@@ -1132,8 +1101,7 @@ def fig_state_trend(d):
         return empty_fig()
     top = d.groupby("Bundesland")["Oper insgesamt"].sum().nlargest(6).index
     d_top = d[d["Bundesland"].isin(top)]
-    g = d_top.groupby(["Jahr", "Bundesland"])[
-        "Oper insgesamt"].sum().reset_index()
+    g = d_top.groupby(["Jahr", "Bundesland"])["Oper insgesamt"].sum().reset_index()
     fig = px.line(
         g,
         x="Jahr",
@@ -1200,15 +1168,12 @@ app = Dash(
 app.title = "Crime Analysis Dashboard"
 
 # --------- SIDEBAR ---------
-
-
 def sidebar_layout(path):
     def nav_link(label, href):
         return dbc.NavLink(
             label,
             href=href,
-            active=(path == href or (
-                href == "/overview" and path in ("/", None))),
+            active=(path == href or (href == "/overview" and path in ("/", None))),
             className="w-100 text-start mb-1",
         )
 
@@ -1229,8 +1194,7 @@ def sidebar_layout(path):
                     html.Label("Deliktsgruppen", className="mt-3"),
                     dcc.Dropdown(
                         id="filter-crime",
-                        options=[{"label": c, "value": c}
-                                 for c in CRIME_SHORT],
+                        options=[{"label": c, "value": c} for c in CRIME_SHORT],
                         multi=True,
                         value=[],
                     ),
@@ -1280,17 +1244,14 @@ def layout_overview():
                     html.Div(
                         style=CARD_STYLE,
                         children=[
-                            html.Div("Gesamtzahl der Opfer",
-                                     style=KPI_LABEL_STYLE),
-                            html.Div(id="kpi-total-victims",
-                                     style=KPI_VALUE_STYLE),
+                            html.Div("Gesamtzahl der Opfer", style=KPI_LABEL_STYLE),
+                            html.Div(id="kpi-total-victims", style=KPI_VALUE_STYLE),
                         ],
                     ),
                     html.Div(
                         style=CARD_STYLE,
                         children=[
-                            html.Div("Opfer pro Jahr (Ø)",
-                                     style=KPI_LABEL_STYLE),
+                            html.Div("Opfer pro Jahr (Ø)", style=KPI_LABEL_STYLE),
                             html.Div(
                                 id="kpi-victims-per-year", style=KPI_VALUE_STYLE
                             ),
@@ -1302,26 +1263,21 @@ def layout_overview():
                             html.Div(
                                 "Verhältnis männlich / weiblich", style=KPI_LABEL_STYLE
                             ),
-                            html.Div(id="kpi-male-female",
-                                     style=KPI_VALUE_STYLE),
+                            html.Div(id="kpi-male-female", style=KPI_VALUE_STYLE),
                         ],
                     ),
                     html.Div(
                         style=CARD_STYLE,
                         children=[
-                            html.Div("Unter 18 / Erwachsene",
-                                     style=KPI_LABEL_STYLE),
-                            html.Div(id="kpi-under18-adults",
-                                     style=KPI_VALUE_STYLE),
+                            html.Div("Unter 18 / Erwachsene", style=KPI_LABEL_STYLE),
+                            html.Div(id="kpi-under18-adults", style=KPI_VALUE_STYLE),
                         ],
                     ),
                     html.Div(
                         style=CARD_STYLE,
                         children=[
-                            html.Div("Anzahl Deliktsgruppen",
-                                     style=KPI_LABEL_STYLE),
-                            html.Div(id="kpi-crime-types",
-                                     style=KPI_VALUE_STYLE),
+                            html.Div("Anzahl Deliktsgruppen", style=KPI_LABEL_STYLE),
+                            html.Div(id="kpi-crime-types", style=KPI_VALUE_STYLE),
                         ],
                     ),
                 ],
@@ -1336,7 +1292,6 @@ def layout_overview():
             dcc.Graph(id="crime-pie"),
         ]
     )
-
 
 def layout_geo():
     return html.Div(
@@ -1407,8 +1362,7 @@ def layout_geo():
                             dcc.Dropdown(
                                 id="geo-city-mode",
                                 options=[
-                                    {"label": "Bundesländer ",
-                                        "value": "bundesland"},
+                                    {"label": "Bundesländer ", "value": "bundesland"},
                                     {"label": "Alle Städte", "value": "all"},
                                     {"label": "Top 10 Städte", "value": 10},
                                     {"label": "Top 20 Städte", "value": 20},
@@ -1445,14 +1399,14 @@ def layout_geo():
                         children=[
                             html.Label("Modus"),
                             dcc.Dropdown(
-                                id="geo-safety-mode",
-                                options=[
-                                    {"label": "Alle", "value": "all"},
-                                    {"label": "Gefährlich", "value": "unsafe"},
-                                    {"label": "Sicher", "value": "safe"},
-                                ],
-                                value="all",
-                                clearable=False,
+                            id="geo-safety-mode",
+                             options=[
+                            {"label": "Alle", "value": "all"},
+                            {"label": "Gefährlich", "value": "unsafe"},
+                            {"label": "Sicher", "value": "safe"},
+                                      ],
+                            value="all",
+                            clearable=False,
                             ),
 
                         ],
@@ -1468,6 +1422,8 @@ def layout_geo():
             dcc.Graph(id="topregions"),
         ]
     )
+         
+
 
 
 def layout_crime():
@@ -1479,20 +1435,16 @@ def layout_crime():
                 className="text-muted",
             ),
 
-            dcc.Graph(
-                id="top5-crime", style={"width": "100%", "height": f"{STANDARD_HEIGHT}px"}),
+            dcc.Graph(id="top5-crime", style={"width": "100%", "height": f"{STANDARD_HEIGHT}px"}),
             html.Br(),
 
-            dcc.Graph(id="donut-crime",
-                      style={"width": "100%", "height": f"{STANDARD_HEIGHT}px"}),
+            dcc.Graph(id="donut-crime", style={"width": "100%", "height": f"{STANDARD_HEIGHT}px"}),
             html.Br(),
 
-            dcc.Graph(id="heat", style={
-                      "width": "100%", "height": f"{STANDARD_HEIGHT}px"}),
+            dcc.Graph(id="heat", style={"width": "100%", "height": f"{STANDARD_HEIGHT}px"}),
             html.Br(),
 
-            dcc.Graph(id="stacked", style={
-                      "width": "100%", "height": f"{STANDARD_HEIGHT}px"}),
+            dcc.Graph(id="stacked", style={"width": "100%", "height": f"{STANDARD_HEIGHT}px"}),
             html.Br(),
 
             html.Div(
@@ -1501,8 +1453,7 @@ def layout_crime():
                     html.Label("Deliktsgruppe für Altersanalyse"),
                     dcc.Dropdown(
                         id="age-crime",
-                        options=[{"label": c, "value": c}
-                                 for c in CRIME_SHORT],
+                        options=[{"label": c, "value": c} for c in CRIME_SHORT],
                         value="Straftaten insgesamt",
                         clearable=False,
                     ),
@@ -1510,8 +1461,7 @@ def layout_crime():
             ),
             html.Br(),
 
-            dcc.Graph(id="agechart", style={
-                      "width": "100%", "height": f"{STANDARD_HEIGHT}px"}),
+            dcc.Graph(id="agechart", style={"width": "100%", "height": f"{STANDARD_HEIGHT}px"}),
         ]
     )
 
@@ -1531,7 +1481,6 @@ def layout_temporal():
             dcc.Graph(id="gender"),
         ]
     )
-
 
 def layout_trends():
     return html.Div(
@@ -1577,15 +1526,11 @@ def layout_trends():
                             dcc.Dropdown(
                                 id="city-color-scale",
                                 options=[
-                                    {"label": "Orange-Rot (OrRd)",
-                                     "value": "OrRd"},
+                                    {"label": "Orange-Rot (OrRd)", "value": "OrRd"},
                                     {"label": "Rot (Reds)", "value": "Reds"},
-                                    {"label": "Grün-Blau (YlGnBu)",
-                                     "value": "YlGnBu"},
-                                    {"label": "Blau (Blues)",
-                                     "value": "Blues"},
-                                    {"label": "Lila (Purples)",
-                                     "value": "Purples"},
+                                    {"label": "Grün-Blau (YlGnBu)", "value": "YlGnBu"},
+                                    {"label": "Blau (Blues)", "value": "Blues"},
+                                    {"label": "Lila (Purples)", "value": "Purples"},
                                     {"label": "Viridis", "value": "Viridis"},
                                 ],
                                 value="OrRd",
@@ -1604,8 +1549,7 @@ def layout_trends():
             html.Hr(style={"margin": "32px 0"}),
 
             # ---------- TREND 3: Kinder 0–14 ----------
-            html.H3(
-                "2. Which Cities Are Safest / Most Dangerous for Children (0–14)?"),
+            html.H3("2. Which Cities Are Safest / Most Dangerous for Children (0–14)?"),
             html.P(
                 "Ranking der Städte nach Anzahl der Opfer im Alter von 0–14 Jahren.",
                 className="text-muted",
@@ -1680,12 +1624,11 @@ def layout_trends():
             dcc.Graph(
                 id="trend-children-cities",
                 style={
-                    "width": "100%",
-                    "maxWidth": "100%",              # ensure no internal limit
-                    "height": f"{STANDARD_HEIGHT}px"
-                },
-                # let Plotly stretch with container
-                config={"responsive": True},
+                     "width": "100%",
+                     "maxWidth": "100%",              # ensure no internal limit
+                     "height": f"{STANDARD_HEIGHT}px"
+                 },
+                config={"responsive": True},         # let Plotly stretch with container
             ),
             html.Br(),
             dcc.Graph(
@@ -1697,7 +1640,6 @@ def layout_trends():
             dcc.Graph(id="trend-women-violence", style={"height": "500px"}),
         ]
     )
-
 
 def fig_city_danger(d, top_n=10, color_scale="OrRd"):
     if d.empty:
@@ -1847,8 +1789,8 @@ def fig_children_ranking(d, top_n=10, mode="dangerous", age_group="Kinder <14"):
     # Semantic danger scale: green → yellow → orange → red
     danger_scale = [
         [0.0, "#2ecc71"],  # green (lowest danger)
-        [0.33, "#f1c40f"],  # yellow
-        [0.66, "#f39c12"],  # orange
+        [0.33, "#f1c40f"], # yellow
+        [0.66, "#f39c12"], # orange
         [1.0, "#e74c3c"],  # red (highest danger)
     ]
 
@@ -1952,17 +1894,14 @@ def fig_children_bar(d, top_n=10, mode="dangerous", age_group="Kinder <14"):
         color="Kinder_0_14",
         color_continuous_scale=bar_color_scale,
         hover_data={"Bundesland": True, "Kinder_0_14": True},
-        labels={"Kinder_0_14": f"Opfer ({age_group})",
-                "Region": "Stadt / Region"},
+        labels={"Kinder_0_14": f"Opfer ({age_group})", "Region": "Stadt / Region"},
         title=title,
     )
     fig.update_yaxes(autorange="reversed")
     fig.update_layout(coloraxis_showscale=False, height=STANDARD_HEIGHT)
     return fig
 
-# viollence agains Women over time
-
-
+# viollence agains Women over time 
 def fig_violence_women(d):
     if d.empty:
         return empty_fig("Keine Daten verfügbar")
@@ -2094,8 +2033,6 @@ def render_page(path):
 
 # --------- SIDEBAR TOGGLE CALLBACKS ---------
 # Toggle sidebar visibility store
-
-
 @app.callback(
     Output("sidebar-visible", "data"),
     Input("toggle-sidebar", "n_clicks"),
@@ -2113,8 +2050,6 @@ def toggle_sidebar(n_clicks, visible):
     return visible
 
 # Dynamically update sidebar and content styles
-
-
 @app.callback(
     Output("sidebar", "style"),
     Output("page-content", "style"),
@@ -2178,16 +2113,16 @@ def update_overview(years, states):
 def update_selected_state(click_data, back_clicks, filter_states, current_state):
     """Handle state selection logic"""
     ctx = callback_context
-
+    
     if not ctx.triggered:
         return current_state
-
+    
     trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
-
+    
     # Reset if back button clicked or filter changed
     if trigger_id == 'back-to-germany' or trigger_id == 'filter-state':
         return None
-
+    
     # Only process map clicks if we're at state level (not city level)
     if trigger_id == 'map' and click_data and current_state is None:
         # We're at state level, so process the click
@@ -2203,11 +2138,10 @@ def update_selected_state(click_data, back_clicks, filter_states, current_state)
                     return point['customdata'][0]
         except Exception as e:
             print(f"Error processing click: {e}")
-
-    # If we're already in a state view (current_state is not None),
+    
+    # If we're already in a state view (current_state is not None), 
     # clicking on the map should do nothing
     return current_state
-
 
 @app.callback(
     Output("map", "figure"),
@@ -2324,7 +2258,7 @@ def update_trend_children_cities(years, crimes, states, top_n, mode, age_group):
     return map_fig, bar_fig
 
 
-# viollence against Women callback
+#viollence against Women callback
 @app.callback(
     Output("trend-women-violence", "figure"),
     Input("filter-year", "value"),
@@ -2352,3 +2286,5 @@ def update_temporal(years, crimes, states):
 
 if __name__ == "__main__":
     app.run(debug=True)
+
+
